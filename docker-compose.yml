@@ -1,0 +1,63 @@
+services:
+  # MongoDB Database
+  mongodb:
+    image: mongo:7.0
+    container_name: cierta_mongodb
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: password123
+      MONGO_INITDB_DATABASE: cierta_db
+    volumes:
+      - mongodb_data:/data/db
+      - ./mongo-init:/docker-entrypoint-initdb.d
+    networks:
+      - cierta_network
+
+  # Redis Cache
+  redis:
+    image: redis:7.2-alpine
+    container_name: cierta_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes --requirepass redis123
+    volumes:
+      - redis_data:/data
+    networks:
+      - cierta_network
+
+  # Node.js Application
+  app:
+    build: .
+    container_name: cierta_app
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    environment:
+      NODE_ENV: production
+      PORT: 5000
+      MONGO_URI: mongodb://admin:password123@mongodb:27017/cierta_db?authSource=admin
+      MONGO_DB_NAME: cierta_db
+      REDIS_URL: redis://:redis123@redis:6379
+      JWT_SECRET: your_jwt_secret_here
+      JWT_EXPIRE: 7d
+      ALLOWED_ORIGINS: http://localhost:3000,http://localhost:3001
+    depends_on:
+      - mongodb
+      - redis
+    volumes:
+      - ./PDF-files:/app/PDF-files
+    networks:
+      - cierta_network
+
+volumes:
+  mongodb_data:
+  redis_data:
+
+networks:
+  cierta_network:
+    driver: bridge
+

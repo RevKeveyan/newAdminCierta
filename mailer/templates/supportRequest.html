@@ -1,0 +1,23 @@
+<div style="font-family: Arial, sans-serif; background-color: #FAF8F8; padding: 20px;">
+  <div style="max-width: 600px; margin: auto; background-color: #FFFFFF; border-radius: 8px; overflow: hidden; box-shadow: 0 0 10px rgba(0,0,0,0.05);">
+    <div style="background: linear-gradient(to right, #1D75BF, #5FAEF1); color: #FFFFFF; padding: 20px;">
+      <h2 style="margin: 0;">New Support Request</h2>
+      <p style="margin: 5px 0;">From: {{name}}</p>
+      <p style="margin: 5px 0;">Subject: {{subject}}</p>
+    </div>
+
+    <div style="padding: 20px; color: #212121;">
+      <h3 style="margin-top: 0; color: #1D75BF;">Message</h3>
+      <p style="white-space: pre-wrap;">{{message}}</p>
+
+      <h3 style="color: #1D75BF;">Contact Info</h3>
+      <p><strong>Name:</strong> {{name}}</p>
+      <p><strong>Email:</strong> {{email}}</p>
+      {{#if phone}}<p><strong>Phone:</strong> {{phone}}</p>{{/if}}
+    </div>
+
+    <div style="background-color: #F4F4F4; text-align: center; padding: 15px; color: #ABABAB; font-size: 12px;">
+      This email was automatically generated from the Cierta support form.
+    </div>
+  </div>
+</div>
