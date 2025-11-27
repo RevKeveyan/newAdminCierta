@@ -11,17 +11,35 @@ const createIndexes = async () => {
     // Составные индексы для частых запросов
     await Load.collection.createIndex({ status: 1, createdAt: -1 });
     await Load.collection.createIndex({ createdBy: 1, createdAt: -1 });
-    await Load.collection.createIndex({ 'carrier.name': 1, status: 1 });
-    await Load.collection.createIndex({ customerCompanyName: 1, status: 1 });
-    await Load.collection.createIndex({ type: 1, status: 1 });
-    await Load.collection.createIndex({ vin: 1 }, { unique: true });
+    await Load.collection.createIndex({ 'type.freight': 1, status: 1 });
+    await Load.collection.createIndex({ 'type.vehicle': 1, status: 1 });
+    
+    // Индекс для поиска по VIN (не уникальный, так как VIN может быть null и повторяться)
+    // VIN находится в vehicle.shipment[].vin, поэтому используем sparse индекс
+    await Load.collection.createIndex({ 'vehicle.shipment.vin': 1 }, { sparse: true });
     
     // Текстовый индекс для поиска
+    // В MongoDB может быть только один текстовый индекс на коллекцию
+    // Сначала удаляем старый текстовый индекс, если он существует
+    try {
+      const indexes = await Load.collection.indexes();
+      const textIndex = indexes.find(idx => idx.key && idx.key._fts);
+      if (textIndex) {
+        await Load.collection.dropIndex(textIndex.name);
+        console.log(`Dropped old text index: ${textIndex.name}`);
+      }
+    } catch (error) {
+      // Игнорируем ошибки, если индекс не существует
+      if (error.code !== 27) { // 27 = IndexNotFound
+        console.warn('Warning while dropping old text index:', error.message);
+      }
+    }
+    
+    // Создаем новый текстовый индекс с нужными полями
     await Load.collection.createIndex({
-      vin: 'text',
-      type: 'text',
-      customerCompanyName: 'text',
-      'carrier.name': 'text'
+      orderId: 'text',
+      tracking: 'text',
+      billOfLadingNumber: 'text'
     });
     
     // Индексы для User модели

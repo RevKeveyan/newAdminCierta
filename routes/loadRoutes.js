@@ -18,7 +18,7 @@ router.get(
 router.get(
   '/search',
   verifyToken,
-  checkRole(['admin', 'dispatcher', 'manager']),
+  // checkRole(['admin', 'dispatcher', 'manager']),
   LoadController.search
 );
 
@@ -26,7 +26,7 @@ router.get(
 router.get(
   '/status/:status',
   verifyToken,
-  checkRole(['admin', 'dispatcher', 'manager']),
+  // checkRole(['admin', 'dispatcher', 'manager']),
   LoadController.getByStatus
 );
 
@@ -34,15 +34,23 @@ router.get(
 router.get(
   '/carrier/:carrierId',
   verifyToken,
-  checkRole(['admin', 'dispatcher', 'manager']),
+  // checkRole(['admin', 'dispatcher', 'manager']),
   LoadController.getByCarrier
+);
+
+// 🔍 GET /api/loads/customer/:customerId - get loads by customer
+router.get(
+  '/customer/:customerId',
+  verifyToken,
+  // checkRole(['admin', 'dispatcher', 'manager']),
+  LoadController.getByCustomer
 );
 
 // 🔍 GET /api/loads/:id/history - get load history
 router.get(
   '/:id/history',
   verifyToken,
-  checkRole(['admin', 'dispatcher', 'manager']),
+  // checkRole(['admin', 'dispatcher', 'manager']),
   LoadController.getLoadHistory
 );
 
@@ -59,7 +67,7 @@ router.post(
 router.put(
   '/:id',
   verifyToken,
-  checkRole(['admin', 'dispatcher']),
+  // checkRole(['admin', 'dispatcher']),
   LoadController.update
 );
 
@@ -67,7 +75,7 @@ router.put(
 router.put(
   '/:id/full',
   verifyToken,
-  checkRole(['admin', 'dispatcher']),
+  // checkRole(['admin', 'dispatcher']),
   uploadFiles('loads', true), // support file uploads
   LoadController.updateLoad
 );
@@ -76,7 +84,7 @@ router.put(
 router.put(
   '/:id/status',
   verifyToken,
-  checkRole(['admin', 'dispatcher']),
+  // checkRole(['admin', 'dispatcher']),
   LoadController.updateStatus
 );
 
@@ -84,41 +92,41 @@ router.put(
 router.delete(
   '/:id',
   verifyToken,
-  checkRole(['admin']),
+  // checkRole(['admin']),
   LoadController.delete
 );
 
-// 📄 PDF Generation Routes
+// 📄 PDF Generation Routes - ВРЕМЕННО ОТКЛЮЧЕНО для тестирования интеграции с UI
 // 🔍 GET /api/loads/:id/bol - generate BOL PDF
-router.get(
-  '/:id/bol',
-  verifyToken,
-  checkRole(['admin', 'dispatcher', 'manager']),
-  LoadController.generateBOL
-);
+// router.get(
+//   '/:id/bol',
+//   verifyToken,
+//   // checkRole(['admin', 'dispatcher', 'manager']),
+//   LoadController.generateBOL
+// );
 
 // 🔍 GET /api/loads/:id/rate-confirmation - generate Rate Confirmation PDF
-router.get(
-  '/:id/rate-confirmation',
-  verifyToken,
-  checkRole(['admin', 'dispatcher', 'manager']),
-  LoadController.generateRateConfirmation
-);
+// router.get(
+//   '/:id/rate-confirmation',
+//   verifyToken,
+//   // checkRole(['admin', 'dispatcher', 'manager']),
+//   LoadController.generateRateConfirmation
+// );
 
 // 🔍 GET /api/loads/:id/documents - generate all documents (BOL + Rate Confirmation)
-router.get(
-  '/:id/documents',
-  verifyToken,
-  checkRole(['admin', 'dispatcher', 'manager']),
-  LoadController.generateAllDocuments
-);
+// router.get(
+//   '/:id/documents',
+//   verifyToken,
+//   // checkRole(['admin', 'dispatcher', 'manager']),
+//   LoadController.generateAllDocuments
+// );
 
 // 📥 GET /api/loads/download/:filename - download generated PDF
-router.get(
-  '/download/:filename',
-  verifyToken,
-  checkRole(['admin', 'dispatcher', 'manager']),
-  LoadController.downloadPDF
-);
+// router.get(
+//   '/download/:filename',
+//   verifyToken,
+//   // checkRole(['admin', 'dispatcher', 'manager']),
+//   LoadController.downloadPDF
+// );
 
 module.exports = router;

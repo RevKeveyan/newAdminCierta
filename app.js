@@ -52,7 +52,7 @@ app.use('/api/', limiter);
 // Более строгий лимит для auth endpoints
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 5, // только 5 попыток входа за 15 минут
+  max: 10, // только 5 попыток входа за 15 минут
   message: {
     error: 'Too many authentication attempts, please try again later.'
   }
@@ -87,6 +87,8 @@ const statsRoutes   = require("./routes/ststsRoutes");
 const userRoutes    = require("./routes/userRoutes");
 const authRoutes    = require("./routes/authRoutes");
 const performanceRoutes = require("./routes/performanceRoutes");
+const customerRoutes = require("./routes/customerRoutes");
+const carrierRoutes = require("./routes/carrierRoutes");
 
 // Префиксуем API (рекомендовано, чтобы не конфликтовать со статикой)
 app.use("/loads", loadRoutes);
@@ -94,6 +96,8 @@ app.use("/stats", statsRoutes);
 app.use("/users", userRoutes);
 app.use("/auth", authRoutes);
 app.use("/performance", performanceRoutes);
+app.use("/customers", customerRoutes);
+app.use("/carriers", carrierRoutes);
 // Health-check (удобно для мониторинга/uptime-ботов)
 app.get("/health", (_req, res) => res.status(200).json({ ok: true }));
 

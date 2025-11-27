@@ -8,7 +8,7 @@ const loadPaymentSchema = new mongoose.Schema(
     date: { type: Date, default: Date.now },
     type: {
       type: String,
-      enum: ["carrier", "customer"], // кому или от кого
+      enum: ["carrier", "customer"], 
       required: true
     },
     note: String

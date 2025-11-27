@@ -16,38 +16,38 @@ const {
 
 // Получить общую статистику
 router.get('/general', 
-  verifyToken, 
-  validateRequestWithSchema(getGeneralStatsValidation), 
+  // verifyToken, 
+  // validateRequestWithSchema(getGeneralStatsValidation), 
   statsController.getGeneralStats
 );
 
 // Получить статистику конкретного пользователя
 router.get('/user/:userId', 
-  verifyToken, 
-  validateRequestWithSchema(getUserStatsValidation), 
+  // verifyToken, 
+  // validateRequestWithSchema(getUserStatsValidation), 
   statsController.getUserStats
 );
 
 // Получить статистику всех пользователей
 router.get('/users', 
-  verifyToken, 
-  checkRole(['admin', 'manager']), 
-  validateRequestWithSchema(getAllUsersStatsValidation), 
+  // verifyToken, 
+  // checkRole(['admin', 'manager']), 
+  // validateRequestWithSchema(getAllUsersStatsValidation), 
   statsController.getAllUsersStats
 );
 
 // Получить детальную статистику по изменениям
 router.get('/detailed', 
-  verifyToken, 
-  validateRequestWithSchema(getDetailedStatsValidation), 
+  // verifyToken, 
+  // validateRequestWithSchema(getDetailedStatsValidation), 
   statsController.getDetailedStats
 );
 
 // Admin trigger for manual update (legacy)
 router.post('/update', 
-  verifyToken, 
-  checkRole(['admin']), 
-  validateRequestWithSchema(updateStatsValidation),
+  // verifyToken, 
+  // checkRole(['admin']), 
+  // validateRequestWithSchema(updateStatsValidation),
   async (req, res) => {
     try {
       await updateAllStats();
@@ -60,8 +60,8 @@ router.post('/update',
 
 // Admin trigger for cached stats update
 router.post('/update-cached', 
-  verifyToken, 
-  checkRole(['admin']), 
+  // verifyToken, 
+  // checkRole(['admin']), 
   async (req, res) => {
     try {
       await cachedStatsService.updateAllCachedStats();

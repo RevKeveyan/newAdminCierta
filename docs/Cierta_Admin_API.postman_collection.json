@@ -1,0 +1,1242 @@
+{
+  "info": {
+    "_postman_id": "f3e3f007-0e2f-4a10-a2f6-8a83ef6f3d8e",
+    "name": "Cierta Admin API",
+    "description": "Complete Postman collection for Cierta Admin API with updated database structure (Load, Carrier, Customer as separate entities).",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "const token = pm.environment.get('auth_token');",
+          "if (token) {",
+          "  pm.request.headers.upsert({ key: 'Authorization', value: 'Bearer ' + token });",
+          "}"
+        ]
+      }
+    }
+  ],
+  "item": [
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "Login",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{admin_email}}\",\n  \"password\": \"{{admin_password}}\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/auth/login",
+              "host": ["{{base_url}}"],
+              "path": ["auth", "login"]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Login succeeded', function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "let jsonData;",
+                  "try {",
+                  "  jsonData = pm.response.json();",
+                  "} catch (err) {",
+                  "  jsonData = {};",
+                  "}",
+                  "if (jsonData.token) {",
+                  "  pm.environment.set('auth_token', jsonData.token);",
+                  "}",
+                  "const userInfo = jsonData.user || {};",
+                  "if (userInfo.id || userInfo._id) {",
+                  "  pm.environment.set('user_id', userInfo.id || userInfo._id);",
+                  "}",
+                  "pm.test('Response contains token', function () {",
+                  "  pm.expect(jsonData).to.have.property('token');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Forgot Password",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{admin_email}}\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/auth/forgot-password",
+              "host": ["{{base_url}}"],
+              "path": ["auth", "forgot-password"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Reset Password",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{admin_email}}\",\n  \"code\": \"{{reset_code}}\",\n  \"newPassword\": \"AdminPassword123!\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/auth/reset-password",
+              "host": ["{{base_url}}"],
+              "path": ["auth", "reset-password"]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Users",
+      "item": [
+        {
+          "name": "List Users",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/users?page=1&limit=20",
+              "host": ["{{base_url}}"],
+              "path": ["users"],
+              "query": [
+                { "key": "page", "value": "1" },
+                { "key": "limit", "value": "20" }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Search Users",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/users/search?q=smith&role=dispatcher",
+              "host": ["{{base_url}}"],
+              "path": ["users", "search"],
+              "query": [
+                { "key": "q", "value": "smith" },
+                { "key": "role", "value": "dispatcher" }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Users by Role",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/users/role/dispatcher?page=1&limit=10",
+              "host": ["{{base_url}}"],
+              "path": ["users", "role", "dispatcher"],
+              "query": [
+                { "key": "page", "value": "1" },
+                { "key": "limit", "value": "10" }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Current User Profile",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/users/profile",
+              "host": ["{{base_url}}"],
+              "path": ["users", "profile"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Create User",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"firstName\": \"Test\",\n  \"lastName\": \"User\",\n  \"email\": \"cierta-user-{{$timestamp}}@example.com\",\n  \"password\": \"TempPass123!\",\n  \"role\": \"dispatcher\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/users",
+              "host": ["{{base_url}}"],
+              "path": ["users"]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "  const jsonData = pm.response.json();",
+                  "  const user = jsonData.data || {};",
+                  "  if (user.id || user._id) {",
+                  "    pm.environment.set('user_id', user.id || user._id);",
+                  "  }",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Update User",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"firstName\": \"Updated\",\n  \"lastName\": \"User\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/users/{{user_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["users", "{{user_id}}"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Update User Status",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"active\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/users/{{user_id}}/status",
+              "host": ["{{base_url}}"],
+              "path": ["users", "{{user_id}}", "status"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Update Current Profile",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"firstName\": \"Admin\",\n  \"lastName\": \"User\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/users/profile/{{user_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["users", "profile", "{{user_id}}"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Delete User",
+          "request": {
+            "method": "DELETE",
+            "url": {
+              "raw": "{{base_url}}/users/{{user_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["users", "{{user_id}}"]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Carriers",
+      "item": [
+        {
+          "name": "List Carriers",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/carriers?page=1&limit=20",
+              "host": ["{{base_url}}"],
+              "path": ["carriers"],
+              "query": [
+                { "key": "page", "value": "1" },
+                { "key": "limit", "value": "20" }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Search Carriers",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/carriers/search?q=John&page=1&limit=10",
+              "host": ["{{base_url}}"],
+              "path": ["carriers", "search"],
+              "query": [
+                { "key": "q", "value": "John" },
+                { "key": "page", "value": "1" },
+                { "key": "limit", "value": "10" }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Carrier by ID",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/carriers/{{carrier_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["carriers", "{{carrier_id}}"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Carrier Loads",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/carriers/{{carrier_id}}/loads?page=1&limit=10",
+              "host": ["{{base_url}}"],
+              "path": ["carriers", "{{carrier_id}}", "loads"],
+              "query": [
+                { "key": "page", "value": "1" },
+                { "key": "limit", "value": "10" }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Create Carrier",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"John Doe\",\n  \"phoneNumber\": \"+1122334455\",\n  \"email\": \"carrier@example.com\",\n  \"companyName\": \"Doe Transport\",\n  \"mcNumber\": \"MC123456\",\n  \"dotNumber\": \"DOT789012\",\n  \"address\": {\n    \"address\": \"321 Carrier Blvd\",\n    \"city\": \"Dallas\",\n    \"state\": \"TX\",\n    \"zipCode\": \"75201\"\n  },\n  \"emails\": [\"carrier@example.com\"],\n  \"photos\": []\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/carriers",
+              "host": ["{{base_url}}"],
+              "path": ["carriers"]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "  const jsonData = pm.response.json();",
+                  "  const carrier = jsonData.data || {};",
+                  "  if (carrier.id || carrier._id) {",
+                  "    pm.environment.set('carrier_id', carrier.id || carrier._id);",
+                  "  }",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Update Carrier",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"phoneNumber\": \"+1999888777\",\n  \"email\": \"updated@example.com\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/carriers/{{carrier_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["carriers", "{{carrier_id}}"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Delete Carrier",
+          "request": {
+            "method": "DELETE",
+            "url": {
+              "raw": "{{base_url}}/carriers/{{carrier_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["carriers", "{{carrier_id}}"]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Customers",
+      "item": [
+        {
+          "name": "List Customers",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/customers?page=1&limit=20",
+              "host": ["{{base_url}}"],
+              "path": ["customers"],
+              "query": [
+                { "key": "page", "value": "1" },
+                { "key": "limit", "value": "20" }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Search Customers",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/customers/search?q=ABC&page=1&limit=10",
+              "host": ["{{base_url}}"],
+              "path": ["customers", "search"],
+              "query": [
+                { "key": "q", "value": "ABC" },
+                { "key": "page", "value": "1" },
+                { "key": "limit", "value": "10" }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Customer by ID",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/customers/{{customer_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["customers", "{{customer_id}}"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Customer Loads",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/customers/{{customer_id}}/loads?page=1&limit=10",
+              "host": ["{{base_url}}"],
+              "path": ["customers", "{{customer_id}}", "loads"],
+              "query": [
+                { "key": "page", "value": "1" },
+                { "key": "limit", "value": "10" }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Create Customer",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"companyName\": \"ABC Company\",\n  \"customerAddress\": {\n    \"address\": \"123 Main St\",\n    \"city\": \"New York\",\n    \"state\": \"NY\",\n    \"zipCode\": \"10001\"\n  },\n  \"emails\": [\"customer@example.com\", \"info@abccompany.com\"],\n  \"phoneNumber\": \"+1234567890\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/customers",
+              "host": ["{{base_url}}"],
+              "path": ["customers"]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "  const jsonData = pm.response.json();",
+                  "  const customer = jsonData.data || {};",
+                  "  if (customer.id || customer._id) {",
+                  "    pm.environment.set('customer_id', customer.id || customer._id);",
+                  "  }",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Update Customer",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"phoneNumber\": \"+1999888777\",\n  \"emails\": [\"updated@example.com\"]\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/customers/{{customer_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["customers", "{{customer_id}}"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Delete Customer",
+          "request": {
+            "method": "DELETE",
+            "url": {
+              "raw": "{{base_url}}/customers/{{customer_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["customers", "{{customer_id}}"]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Loads",
+      "item": [
+        {
+          "name": "List Loads",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/loads?page=1&limit=20",
+              "host": ["{{base_url}}"],
+              "path": ["loads"],
+              "query": [
+                { "key": "page", "value": "1" },
+                { "key": "limit", "value": "20" }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Search Loads",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/loads/search?q=1234567890&status=Listed",
+              "host": ["{{base_url}}"],
+              "path": ["loads", "search"],
+              "query": [
+                { "key": "q", "value": "1234567890" },
+                { "key": "status", "value": "Listed" }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Load by ID",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/loads/{{load_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["loads", "{{load_id}}"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Loads by Status",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/loads/status/Listed?page=1&limit=10",
+              "host": ["{{base_url}}"],
+              "path": ["loads", "status", "Listed"],
+              "query": [
+                { "key": "page", "value": "1" },
+                { "key": "limit", "value": "10" }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Loads by Carrier",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/loads/carrier/{{carrier_id}}?page=1&limit=10",
+              "host": ["{{base_url}}"],
+              "path": ["loads", "carrier", "{{carrier_id}}"],
+              "query": [
+                { "key": "page", "value": "1" },
+                { "key": "limit", "value": "10" }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Loads by Customer",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/loads/customer/{{customer_id}}?page=1&limit=10",
+              "host": ["{{base_url}}"],
+              "path": ["loads", "customer", "{{customer_id}}"],
+              "query": [
+                { "key": "page", "value": "1" },
+                { "key": "limit", "value": "10" }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Load History",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/loads/{{load_id}}/history?page=1&limit=10",
+              "host": ["{{base_url}}"],
+              "path": ["loads", "{{load_id}}", "history"],
+              "query": [
+                { "key": "page", "value": "1" },
+                { "key": "limit", "value": "10" }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Create Load (with new Carrier and Customer)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "customer",
+                  "value": "{\"companyName\":\"ABC Company\",\"customerAddress\":{\"address\":\"123 Main St\",\"city\":\"New York\",\"state\":\"NY\",\"zipCode\":\"10001\"},\"emails\":[\"customer@example.com\"],\"phoneNumber\":\"+1234567890\"}",
+                  "type": "text"
+                },
+                {
+                  "key": "customerEmails",
+                  "value": "customer@example.com",
+                  "type": "text"
+                },
+                {
+                  "key": "customerRate",
+                  "value": "1500",
+                  "type": "text"
+                },
+                {
+                  "key": "carrier",
+                  "value": "{\"name\":\"John Doe\",\"companyName\":\"Doe Transport\",\"mcNumber\":\"MC123456\",\"phoneNumber\":\"+1122334455\",\"email\":\"carrier@example.com\",\"address\":{\"address\":\"321 Carrier Blvd\",\"city\":\"Dallas\",\"state\":\"TX\",\"zipCode\":\"75201\"}}",
+                  "type": "text"
+                },
+                {
+                  "key": "carrierEmails",
+                  "value": "carrier@example.com",
+                  "type": "text"
+                },
+                {
+                  "key": "type",
+                  "value": "{\"freight\":true,\"vehicle\":false}",
+                  "type": "text"
+                },
+                {
+                  "key": "freight",
+                  "value": "{\"shipment\":[{\"commodity\":\"Electronics\",\"dimensionsLength\":\"10\",\"dimensionsWidth\":\"5\",\"dimensionsHeight\":\"3\",\"weight\":\"500\",\"poNumber\":\"PO-12345\"}]}",
+                  "type": "text"
+                },
+                {
+                  "key": "pickup",
+                  "value": "{\"locationName\":\"Warehouse A\",\"address\":{\"address\":\"456 Pickup St\",\"city\":\"Los Angeles\",\"state\":\"CA\",\"zipCode\":\"90001\"},\"contactPhone\":\"+1987654321\",\"date\":\"2024-01-15\"}",
+                  "type": "text"
+                },
+                {
+                  "key": "delivery",
+                  "value": "{\"locationName\":\"Store B\",\"address\":{\"address\":\"789 Delivery Ave\",\"city\":\"Chicago\",\"state\":\"IL\",\"zipCode\":\"60601\"},\"contactPhone\":\"+1555555555\",\"date\":\"2024-01-20\"}",
+                  "type": "text"
+                },
+                {
+                  "key": "status",
+                  "value": "Listed",
+                  "type": "text"
+                },
+                {
+                  "key": "tracking",
+                  "value": "TRACK123456",
+                  "type": "text"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{base_url}}/loads",
+              "host": ["{{base_url}}"],
+              "path": ["loads"]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Load creation handled', function () {",
+                  "  pm.expect([201, 400, 401, 403]).to.include(pm.response.code);",
+                  "});",
+                  "if (pm.response.code === 201) {",
+                  "  const jsonData = pm.response.json();",
+                  "  const load = jsonData.data || {};",
+                  "  if (load.id || load._id) {",
+                  "    pm.environment.set('load_id', load.id || load._id);",
+                  "  }",
+                  "  if (load.customer && (load.customer.id || load.customer._id)) {",
+                  "    pm.environment.set('customer_id', load.customer.id || load.customer._id);",
+                  "  }",
+                  "  if (load.carrier && (load.carrier.id || load.carrier._id)) {",
+                  "    pm.environment.set('carrier_id', load.carrier.id || load.carrier._id);",
+                  "  }",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create Load (with existing Carrier and Customer)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "customer",
+                  "value": "{\"id\":\"{{customer_id}}\"}",
+                  "type": "text"
+                },
+                {
+                  "key": "carrier",
+                  "value": "{\"id\":\"{{carrier_id}}\"}",
+                  "type": "text"
+                },
+                {
+                  "key": "type",
+                  "value": "{\"freight\":true,\"vehicle\":false}",
+                  "type": "text"
+                },
+                {
+                  "key": "freight",
+                  "value": "{\"shipment\":[{\"commodity\":\"Furniture\",\"dimensionsLength\":\"12\",\"dimensionsWidth\":\"8\",\"dimensionsHeight\":\"6\",\"weight\":\"1000\",\"poNumber\":\"PO-99999\"}]}",
+                  "type": "text"
+                },
+                {
+                  "key": "pickup",
+                  "value": "{\"locationName\":\"Warehouse\",\"address\":{\"address\":\"300 Pickup Rd\",\"city\":\"Orlando\",\"state\":\"FL\",\"zipCode\":\"32801\"},\"contactPhone\":\"+13055551111\",\"date\":\"2024-02-01\"}",
+                  "type": "text"
+                },
+                {
+                  "key": "delivery",
+                  "value": "{\"locationName\":\"Store\",\"address\":{\"address\":\"400 Delivery Blvd\",\"city\":\"Jacksonville\",\"state\":\"FL\",\"zipCode\":\"32201\"},\"contactPhone\":\"+13055552222\",\"date\":\"2024-02-05\"}",
+                  "type": "text"
+                },
+                {
+                  "key": "status",
+                  "value": "Listed",
+                  "type": "text"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{base_url}}/loads",
+              "host": ["{{base_url}}"],
+              "path": ["loads"]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "  const jsonData = pm.response.json();",
+                  "  const load = jsonData.data || {};",
+                  "  if (load.id || load._id) {",
+                  "    pm.environment.set('load_id', load.id || load._id);",
+                  "  }",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create Load (Vehicle Type)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "customer",
+                  "value": "{\"companyName\":\"Vehicle Customer Inc\",\"customerAddress\":{\"address\":\"100 Vehicle St\",\"city\":\"Miami\",\"state\":\"FL\",\"zipCode\":\"33101\"}}",
+                  "type": "text"
+                },
+                {
+                  "key": "carrier",
+                  "value": "{\"name\":\"Vehicle Carrier\",\"mcNumber\":\"MC999999\"}",
+                  "type": "text"
+                },
+                {
+                  "key": "type",
+                  "value": "{\"freight\":false,\"vehicle\":true}",
+                  "type": "text"
+                },
+                {
+                  "key": "vehicle",
+                  "value": "{\"shipment\":[{\"vin\":\"1HGBH41JXMN109186\",\"make\":\"Honda\",\"model\":\"Civic\",\"year\":\"2020\",\"value\":\"25000\"}],\"specialRequirements\":\"No smoking\"}",
+                  "type": "text"
+                },
+                {
+                  "key": "pickup",
+                  "value": "{\"locationName\":\"Dealership\",\"address\":{\"address\":\"500 Auto Ave\",\"city\":\"Tampa\",\"state\":\"FL\",\"zipCode\":\"33601\"},\"date\":\"2024-02-10\"}",
+                  "type": "text"
+                },
+                {
+                  "key": "delivery",
+                  "value": "{\"locationName\":\"Customer Location\",\"address\":{\"address\":\"600 Delivery St\",\"city\":\"Jacksonville\",\"state\":\"FL\",\"zipCode\":\"32201\"},\"date\":\"2024-02-15\"}",
+                  "type": "text"
+                },
+                {
+                  "key": "status",
+                  "value": "Listed",
+                  "type": "text"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{base_url}}/loads",
+              "host": ["{{base_url}}"],
+              "path": ["loads"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Update Load",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"Dispatched\",\n  \"dates\": {\n    \"assignedDate\": \"2024-01-12\",\n    \"pickupDate\": \"2024-01-15\"\n  }\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/loads/{{load_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["loads", "{{load_id}}"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Update Load (Full / with files)",
+          "request": {
+            "method": "PUT",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "status",
+                  "value": "Picked up",
+                  "type": "text"
+                },
+                {
+                  "key": "dates",
+                  "value": "{\"pickupDate\":\"2024-01-16\"}",
+                  "type": "text"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{base_url}}/loads/{{load_id}}/full",
+              "host": ["{{base_url}}"],
+              "path": ["loads", "{{load_id}}", "full"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Update Load Status",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"Delivered\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/loads/{{load_id}}/status",
+              "host": ["{{base_url}}"],
+              "path": ["loads", "{{load_id}}", "status"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Delete Load",
+          "request": {
+            "method": "DELETE",
+            "url": {
+              "raw": "{{base_url}}/loads/{{load_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["loads", "{{load_id}}"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Generate BOL PDF",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/loads/{{load_id}}/bol",
+              "host": ["{{base_url}}"],
+              "path": ["loads", "{{load_id}}", "bol"]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "  const jsonData = pm.response.json();",
+                  "  if (jsonData.data && jsonData.data.filename) {",
+                  "    pm.environment.set('pdf_filename', jsonData.data.filename);",
+                  "  }",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Generate Rate Confirmation PDF",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/loads/{{load_id}}/rate-confirmation",
+              "host": ["{{base_url}}"],
+              "path": ["loads", "{{load_id}}", "rate-confirmation"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Generate All Documents",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/loads/{{load_id}}/documents",
+              "host": ["{{base_url}}"],
+              "path": ["loads", "{{load_id}}", "documents"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Download Generated PDF",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/loads/download/{{pdf_filename}}",
+              "host": ["{{base_url}}"],
+              "path": ["loads", "download", "{{pdf_filename}}"]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Stats",
+      "item": [
+        {
+          "name": "Get General Stats",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/stats/general?period=month&startDate={{start_date}}&endDate={{end_date}}",
+              "host": ["{{base_url}}"],
+              "path": ["stats", "general"],
+              "query": [
+                { "key": "period", "value": "month" },
+                { "key": "startDate", "value": "{{start_date}}" },
+                { "key": "endDate", "value": "{{end_date}}" }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get User Stats",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/stats/user/{{stats_user_id}}?period=month&startDate={{start_date}}&endDate={{end_date}}",
+              "host": ["{{base_url}}"],
+              "path": ["stats", "user", "{{stats_user_id}}"],
+              "query": [
+                { "key": "period", "value": "month" },
+                { "key": "startDate", "value": "{{start_date}}" },
+                { "key": "endDate", "value": "{{end_date}}" }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get All Users Stats",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/stats/users?period=month&startDate={{start_date}}&endDate={{end_date}}",
+              "host": ["{{base_url}}"],
+              "path": ["stats", "users"],
+              "query": [
+                { "key": "period", "value": "month" },
+                { "key": "startDate", "value": "{{start_date}}" },
+                { "key": "endDate", "value": "{{end_date}}" }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Detailed Stats",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/stats/detailed?startDate={{start_date}}&endDate={{end_date}}&userId={{stats_user_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["stats", "detailed"],
+              "query": [
+                { "key": "startDate", "value": "{{start_date}}" },
+                { "key": "endDate", "value": "{{end_date}}" },
+                { "key": "userId", "value": "{{stats_user_id}}" }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Update Legacy Stats",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"force\": false\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/stats/update",
+              "host": ["{{base_url}}"],
+              "path": ["stats", "update"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Update Cached Stats",
+          "request": {
+            "method": "POST",
+            "url": {
+              "raw": "{{base_url}}/stats/update-cached",
+              "host": ["{{base_url}}"],
+              "path": ["stats", "update-cached"]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Performance",
+      "item": [
+        {
+          "name": "Get Performance Stats",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/performance/stats",
+              "host": ["{{base_url}}"],
+              "path": ["performance", "stats"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Export Performance Metrics",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"filename\": \"{{performance_export_filename}}\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/performance/export",
+              "host": ["{{base_url}}"],
+              "path": ["performance", "export"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Clear Performance Metrics",
+          "request": {
+            "method": "DELETE",
+            "url": {
+              "raw": "{{base_url}}/performance/clear",
+              "host": ["{{base_url}}"],
+              "path": ["performance", "clear"]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Health",
+      "item": [
+        {
+          "name": "Health Check",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/health",
+              "host": ["{{base_url}}"],
+              "path": ["health"]
+            }
+          },
+          "response": []
+        }
+      ]
+    }
+  ]
+}

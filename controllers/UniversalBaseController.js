@@ -700,14 +700,20 @@ class UniversalBaseController {
   async createHistoryRecord(recordId, action, userId, changes) {
     if (!this.historyModel) return;
 
+    // Если userId не предоставлен, пропускаем создание истории
+    if (!userId) {
+      console.warn(`Cannot create history record: userId is required for action '${action}'`);
+      return;
+    }
+
     try {
-      // Для создания записи не записываем детальные изменения
+      // Для создания записи не записываем детальные изменения, только createdBy
       if (action === 'created') {
         await this.historyModel.create({
           loadId: recordId,
           action,
           changedBy: userId,
-          changes: [] // Пустой массив для создания
+          changes: [] // Пустой массив для создания - сохраняем только createdBy
         });
         return;
       }

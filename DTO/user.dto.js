@@ -1,4 +1,6 @@
-function userDTO(user) {
+function mapUser(user) {
+  if (!user) return null;
+
   return {
     id: user._id,
     email: user.email,
@@ -13,5 +15,12 @@ function userDTO(user) {
   };
 }
 
-// Export as an object with format method to match controller expectations
+/**
+ * For historical compatibility the module exports a callable function (used by
+ * AuthController) while also exposing a `format` method expected by
+ * UniversalBaseController and UserController.
+ */
+const userDTO = (user) => mapUser(user);
+userDTO.format = mapUser;
+
 module.exports = userDTO;
