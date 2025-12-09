@@ -2,10 +2,10 @@ const express = require('express');
 const router = express.Router();
 const { verifyToken } = require('../middlewares/authMiddleware');
 const { checkRole } = require('../middlewares/roleMiddleware');
-const { uploadFiles } = require('../middlewares/uploadMiddleware');
+const { uploadUserFiles } = require('../middlewares/uploadMiddleware');
 const UserController = require('../controllers/UserController');
 
-// GET /api/users
+// GET /users
 router.get(
   '/',
   // verifyToken,
@@ -13,7 +13,7 @@ router.get(
   UserController.getAll
 );
 
-// GET /api/users/search - advanced search
+// GET /users/search - advanced search
 router.get(
   '/search',
   // verifyToken,
@@ -21,7 +21,7 @@ router.get(
   UserController.search
 );
 
-// GET /api/users/role/:role - get users by role
+// GET /users/role/:role - get users by role
 router.get(
   '/role/:role',
   // verifyToken,
@@ -29,32 +29,34 @@ router.get(
   UserController.getByRole
 );
 
-// GET /api/users/profile - get current user profile
+// GET /users/profile - get current user profile
 router.get(
   '/profile',
   verifyToken,
   UserController.getProfile
 );
 
-// POST /api/users
+// POST /users
+// Supports: profileImage (image), userFile (PDF)
 router.post(
   '/',
   // verifyToken,
   // checkRole(['admin']),
-  uploadFiles('users', false), // single avatar
+  uploadUserFiles('users'),
   UserController.create
 );
 
-// PUT /api/users/:id
+// PUT /users/:id
+// Supports: profileImage (image), userFile (PDF)
 router.put(
   '/:id',
   // verifyToken,
   // checkRole(['admin']),
-  uploadFiles('users', false),
+  uploadUserFiles('users'),
   UserController.update
 );
 
-// PUT /api/users/:id/status - update user status
+// PUT /users/:id/status - update user status
 router.put(
   '/:id/status',
   // verifyToken,
@@ -62,15 +64,24 @@ router.put(
   UserController.updateStatus
 );
 
-// PUT /api/users/profile - update current user profile
+// PUT /users/profile - update current user profile
+// Supports: profileImage (image), userFile (PDF)
 router.put(
   '/profile/:id',
   verifyToken,
-  uploadFiles('users', false),
+  uploadUserFiles('users'),
   UserController.updateProfile
 );
 
-// DELETE /api/users/:id
+// DELETE /users/:id/file - remove user PDF file
+router.delete(
+  '/:id/file',
+  // verifyToken,
+  // checkRole(['admin']),
+  UserController.removeUserFile
+);
+
+// DELETE /users/:id
 router.delete(
   '/:id',
   // verifyToken,

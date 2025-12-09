@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "f3e3f007-0e2f-4a10-a2f6-8a83ef6f3d8e",
     "name": "Cierta Admin API",
-    "description": "Complete Postman collection for Cierta Admin API with updated database structure (Load, Carrier, Customer as separate entities).",
+    "description": "Complete Postman collection for Cierta Admin API with updated database structure (Load, Carrier, Customer as separate entities). Includes Payment System (PaymentReceivable, PaymentPayable) with automatic creation on Delivered status. Updated with new user roles and carrier unique field validation.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "event": [
@@ -149,7 +149,8 @@
               "path": ["users", "search"],
               "query": [
                 { "key": "q", "value": "smith" },
-                { "key": "role", "value": "dispatcher" }
+                { "key": "role", "value": "dispatcher" },
+                { "key": "status", "value": "active" }
               ]
             }
           },
@@ -195,13 +196,19 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"firstName\": \"Test\",\n  \"lastName\": \"User\",\n  \"email\": \"cierta-user-{{$timestamp}}@example.com\",\n  \"password\": \"TempPass123!\",\n  \"role\": \"dispatcher\"\n}"
+              "raw": "{\n  \"firstName\": \"Test\",\n  \"lastName\": \"User\",\n  \"email\": \"cierta-user-{{$timestamp}}@example.com\",\n  \"password\": \"TempPass123!\",\n  \"role\": \"dispatcher\",\n  \"companyName\": \"Test Company\",\n  \"status\": \"active\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
             },
             "url": {
               "raw": "{{base_url}}/users",
               "host": ["{{base_url}}"],
               "path": ["users"]
-            }
+            },
+            "description": "Create a new user. Valid roles: admin, manager, accountingManager, accountingIn, accountingOut, dispatcher, partner, BidAgent"
           },
           "response": [],
           "event": [
@@ -245,50 +252,6 @@
           "response": []
         },
         {
-          "name": "Update User Status",
-          "request": {
-            "method": "PUT",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"status\": \"active\"\n}"
-            },
-            "url": {
-              "raw": "{{base_url}}/users/{{user_id}}/status",
-              "host": ["{{base_url}}"],
-              "path": ["users", "{{user_id}}", "status"]
-            }
-          },
-          "response": []
-        },
-        {
-          "name": "Update Current Profile",
-          "request": {
-            "method": "PUT",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"firstName\": \"Admin\",\n  \"lastName\": \"User\"\n}"
-            },
-            "url": {
-              "raw": "{{base_url}}/users/profile/{{user_id}}",
-              "host": ["{{base_url}}"],
-              "path": ["users", "profile", "{{user_id}}"]
-            }
-          },
-          "response": []
-        },
-        {
           "name": "Delete User",
           "request": {
             "method": "DELETE",
@@ -322,23 +285,6 @@
           "response": []
         },
         {
-          "name": "Search Carriers",
-          "request": {
-            "method": "GET",
-            "url": {
-              "raw": "{{base_url}}/carriers/search?q=John&page=1&limit=10",
-              "host": ["{{base_url}}"],
-              "path": ["carriers", "search"],
-              "query": [
-                { "key": "q", "value": "John" },
-                { "key": "page", "value": "1" },
-                { "key": "limit", "value": "10" }
-              ]
-            }
-          },
-          "response": []
-        },
-        {
           "name": "Get Carrier by ID",
           "request": {
             "method": "GET",
@@ -351,23 +297,97 @@
           "response": []
         },
         {
-          "name": "Get Carrier Loads",
+          "name": "Search Carriers - by Email",
           "request": {
             "method": "GET",
             "url": {
-              "raw": "{{base_url}}/carriers/{{carrier_id}}/loads?page=1&limit=10",
+              "raw": "{{base_url}}/carriers/search?q=carrier@example.com&page=1&limit=10",
               "host": ["{{base_url}}"],
-              "path": ["carriers", "{{carrier_id}}", "loads"],
+              "path": ["carriers", "search"],
               "query": [
+                { "key": "q", "value": "carrier@example.com" },
                 { "key": "page", "value": "1" },
                 { "key": "limit", "value": "10" }
               ]
-            }
+            },
+            "description": "Search carriers by email using general search (q parameter)"
           },
           "response": []
         },
         {
-          "name": "Create Carrier",
+          "name": "Search Carriers - by Company Name",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/carriers/search?companyName=Transport&page=1&limit=10",
+              "host": ["{{base_url}}"],
+              "path": ["carriers", "search"],
+              "query": [
+                { "key": "companyName", "value": "Transport" },
+                { "key": "page", "value": "1" },
+                { "key": "limit", "value": "10" }
+              ]
+            },
+            "description": "Search carriers by company name (partial match, case-insensitive)"
+          },
+          "response": []
+        },
+        {
+          "name": "Search Carriers - by MC Number",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/carriers/search?mcNumber=MC-123&page=1&limit=10",
+              "host": ["{{base_url}}"],
+              "path": ["carriers", "search"],
+              "query": [
+                { "key": "mcNumber", "value": "MC-123" },
+                { "key": "page", "value": "1" },
+                { "key": "limit", "value": "10" }
+              ]
+            },
+            "description": "Search carriers by MC number (partial match)"
+          },
+          "response": []
+        },
+        {
+          "name": "Search Carriers - by DOT Number",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/carriers/search?dotNumber=DOT-456&page=1&limit=10",
+              "host": ["{{base_url}}"],
+              "path": ["carriers", "search"],
+              "query": [
+                { "key": "dotNumber", "value": "DOT-456" },
+                { "key": "page", "value": "1" },
+                { "key": "limit", "value": "10" }
+              ]
+            },
+            "description": "Search carriers by DOT number (partial match)"
+          },
+          "response": []
+        },
+        {
+          "name": "Search Carriers - General Search (q)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/carriers/search?q=flatbed&page=1&limit=10",
+              "host": ["{{base_url}}"],
+              "path": ["carriers", "search"],
+              "query": [
+                { "key": "q", "value": "flatbed" },
+                { "key": "page", "value": "1" },
+                { "key": "limit", "value": "10" }
+              ]
+            },
+            "description": "General search across all carrier fields: name, companyName, mcNumber, dotNumber, email, phoneNumber, equipmentType, size"
+          },
+          "response": []
+        },
+        {
+          "name": "Create Carrier (with Bank Details)",
           "request": {
             "method": "POST",
             "header": [
@@ -378,13 +398,19 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"name\": \"John Doe\",\n  \"phoneNumber\": \"+1122334455\",\n  \"email\": \"carrier@example.com\",\n  \"companyName\": \"Doe Transport\",\n  \"mcNumber\": \"MC123456\",\n  \"dotNumber\": \"DOT789012\",\n  \"address\": {\n    \"address\": \"321 Carrier Blvd\",\n    \"city\": \"Dallas\",\n    \"state\": \"TX\",\n    \"zipCode\": \"75201\"\n  },\n  \"emails\": [\"carrier@example.com\"],\n  \"photos\": []\n}"
+              "raw": "{\n  \"name\": \"John Doe\",\n  \"phoneNumber\": \"+1122334455\",\n  \"email\": \"carrier-{{$timestamp}}@example.com\",\n  \"companyName\": \"Doe Transport\",\n  \"mcNumber\": \"MC{{$randomInt}}\",\n  \"dotNumber\": \"DOT{{$randomInt}}\",\n  \"address\": {\n    \"address\": \"321 Carrier Blvd\",\n    \"city\": \"Dallas\",\n    \"state\": \"TX\",\n    \"zipCode\": \"75201\"\n  },\n  \"emails\": [\"carrier@example.com\", \"dispatch@example.com\"],\n  \"photos\": [],\n  \"equipmentType\": \"Semi Truck\",\n  \"size\": \"53'\",\n  \"capabilities\": [\"Lift Gate\", \"Team Drivers\"],\n  \"certifications\": [\"HAZMAT\", \"SmartWay Certified\"],\n  \"routing\": \"123456789\",\n  \"bankAccount\": \"First National Bank\",\n  \"accountNumber\": \"9876543210\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
             },
             "url": {
               "raw": "{{base_url}}/carriers",
               "host": ["{{base_url}}"],
               "path": ["carriers"]
-            }
+            },
+            "description": "Create a new carrier with banking details for payments. New fields: routing, bankAccount, accountNumber"
           },
           "response": [],
           "event": [
@@ -406,7 +432,7 @@
           ]
         },
         {
-          "name": "Update Carrier",
+          "name": "Update Carrier Bank Details",
           "request": {
             "method": "PUT",
             "header": [
@@ -417,13 +443,14 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"phoneNumber\": \"+1999888777\",\n  \"email\": \"updated@example.com\"\n}"
+              "raw": "{\n  \"routing\": \"987654321\",\n  \"bankAccount\": \"Wells Fargo\",\n  \"accountNumber\": \"1234567890\"\n}"
             },
             "url": {
               "raw": "{{base_url}}/carriers/{{carrier_id}}",
               "host": ["{{base_url}}"],
               "path": ["carriers", "{{carrier_id}}"]
-            }
+            },
+            "description": "Update carrier banking details for payments"
           },
           "response": []
         },
@@ -461,23 +488,6 @@
           "response": []
         },
         {
-          "name": "Search Customers",
-          "request": {
-            "method": "GET",
-            "url": {
-              "raw": "{{base_url}}/customers/search?q=ABC&page=1&limit=10",
-              "host": ["{{base_url}}"],
-              "path": ["customers", "search"],
-              "query": [
-                { "key": "q", "value": "ABC" },
-                { "key": "page", "value": "1" },
-                { "key": "limit", "value": "10" }
-              ]
-            }
-          },
-          "response": []
-        },
-        {
           "name": "Get Customer by ID",
           "request": {
             "method": "GET",
@@ -490,23 +500,138 @@
           "response": []
         },
         {
-          "name": "Get Customer Loads",
+          "name": "Search Customers - by Email",
           "request": {
             "method": "GET",
             "url": {
-              "raw": "{{base_url}}/customers/{{customer_id}}/loads?page=1&limit=10",
+              "raw": "{{base_url}}/customers/search?email=customer@example.com&page=1&limit=10",
               "host": ["{{base_url}}"],
-              "path": ["customers", "{{customer_id}}", "loads"],
+              "path": ["customers", "search"],
               "query": [
+                { "key": "email", "value": "customer@example.com" },
                 { "key": "page", "value": "1" },
                 { "key": "limit", "value": "10" }
               ]
-            }
+            },
+            "description": "Search customers by email address (partial match, case-insensitive). Searches in the emails array."
           },
           "response": []
         },
         {
-          "name": "Create Customer",
+          "name": "Search Customers - by Company Name",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/customers/search?companyName=ABC&page=1&limit=10",
+              "host": ["{{base_url}}"],
+              "path": ["customers", "search"],
+              "query": [
+                { "key": "companyName", "value": "ABC" },
+                { "key": "page", "value": "1" },
+                { "key": "limit", "value": "10" }
+              ]
+            },
+            "description": "Search customers by company name (partial match, case-insensitive)"
+          },
+          "response": []
+        },
+        {
+          "name": "Search Customers - by Phone Number",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/customers/search?phoneNumber=555&page=1&limit=10",
+              "host": ["{{base_url}}"],
+              "path": ["customers", "search"],
+              "query": [
+                { "key": "phoneNumber", "value": "555" },
+                { "key": "page", "value": "1" },
+                { "key": "limit", "value": "10" }
+              ]
+            },
+            "description": "Search customers by phone number (partial match)"
+          },
+          "response": []
+        },
+        {
+          "name": "Search Customers - by City/State",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/customers/search?city=New York&state=NY&page=1&limit=10",
+              "host": ["{{base_url}}"],
+              "path": ["customers", "search"],
+              "query": [
+                { "key": "city", "value": "New York" },
+                { "key": "state", "value": "NY" },
+                { "key": "page", "value": "1" },
+                { "key": "limit", "value": "10" }
+              ]
+            },
+            "description": "Search customers by city and/or state"
+          },
+          "response": []
+        },
+        {
+          "name": "Search Customers - by Payment Method",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/customers/search?paymentMethod=Net 30&page=1&limit=10",
+              "host": ["{{base_url}}"],
+              "path": ["customers", "search"],
+              "query": [
+                { "key": "paymentMethod", "value": "Net 30" },
+                { "key": "page", "value": "1" },
+                { "key": "limit", "value": "10" }
+              ]
+            },
+            "description": "Search customers by payment method (exact match: ACH, Wire, Check, Net 30, Net 60, Net 90, COD, Other)"
+          },
+          "response": []
+        },
+        {
+          "name": "Search Customers - General Search (q)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/customers/search?q=logistics&page=1&limit=10",
+              "host": ["{{base_url}}"],
+              "path": ["customers", "search"],
+              "query": [
+                { "key": "q", "value": "logistics" },
+                { "key": "page", "value": "1" },
+                { "key": "limit", "value": "10" }
+              ]
+            },
+            "description": "General search across all customer fields: companyName, emails, phoneNumber, address, city, state, zipCode, paymentMethod, paymentTerms"
+          },
+          "response": []
+        },
+        {
+          "name": "Search Customers - Combined Filters",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/customers/search?companyName=ABC&state=NY&paymentMethod=Net 30&page=1&limit=10&sortBy=companyName&sortOrder=asc",
+              "host": ["{{base_url}}"],
+              "path": ["customers", "search"],
+              "query": [
+                { "key": "companyName", "value": "ABC" },
+                { "key": "state", "value": "NY" },
+                { "key": "paymentMethod", "value": "Net 30" },
+                { "key": "page", "value": "1" },
+                { "key": "limit", "value": "10" },
+                { "key": "sortBy", "value": "companyName" },
+                { "key": "sortOrder", "value": "asc" }
+              ]
+            },
+            "description": "Search with multiple filters combined, with sorting options"
+          },
+          "response": []
+        },
+        {
+          "name": "Create Customer (with Payment Info)",
           "request": {
             "method": "POST",
             "header": [
@@ -517,13 +642,19 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"companyName\": \"ABC Company\",\n  \"customerAddress\": {\n    \"address\": \"123 Main St\",\n    \"city\": \"New York\",\n    \"state\": \"NY\",\n    \"zipCode\": \"10001\"\n  },\n  \"emails\": [\"customer@example.com\", \"info@abccompany.com\"],\n  \"phoneNumber\": \"+1234567890\"\n}"
+              "raw": "{\n  \"companyName\": \"ABC Company\",\n  \"customerAddress\": {\n    \"address\": \"123 Main St\",\n    \"city\": \"New York\",\n    \"state\": \"NY\",\n    \"zipCode\": \"10001\"\n  },\n  \"emails\": [\"customer@example.com\", \"billing@abccompany.com\"],\n  \"phoneNumber\": \"+1234567890\",\n  \"paymentMethod\": \"Net 30\",\n  \"paymentTerms\": \"Payment due within 30 days of invoice\",\n  \"creditLimit\": 50000\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
             },
             "url": {
               "raw": "{{base_url}}/customers",
               "host": ["{{base_url}}"],
               "path": ["customers"]
-            }
+            },
+            "description": "Create a new customer with payment information. New fields: paymentMethod (ACH, Wire, Check, Credit Card, Net 30, Net 60, Net 90, COD, Factoring, Other), paymentTerms, creditLimit"
           },
           "response": [],
           "event": [
@@ -545,7 +676,7 @@
           ]
         },
         {
-          "name": "Update Customer",
+          "name": "Update Customer Payment Info",
           "request": {
             "method": "PUT",
             "header": [
@@ -556,13 +687,14 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"phoneNumber\": \"+1999888777\",\n  \"emails\": [\"updated@example.com\"]\n}"
+              "raw": "{\n  \"paymentMethod\": \"Net 60\",\n  \"paymentTerms\": \"Payment due within 60 days\",\n  \"creditLimit\": 75000\n}"
             },
             "url": {
               "raw": "{{base_url}}/customers/{{customer_id}}",
               "host": ["{{base_url}}"],
               "path": ["customers", "{{customer_id}}"]
-            }
+            },
+            "description": "Update customer payment information"
           },
           "response": []
         },
@@ -600,22 +732,6 @@
           "response": []
         },
         {
-          "name": "Search Loads",
-          "request": {
-            "method": "GET",
-            "url": {
-              "raw": "{{base_url}}/loads/search?q=1234567890&status=Listed",
-              "host": ["{{base_url}}"],
-              "path": ["loads", "search"],
-              "query": [
-                { "key": "q", "value": "1234567890" },
-                { "key": "status", "value": "Listed" }
-              ]
-            }
-          },
-          "response": []
-        },
-        {
           "name": "Get Load by ID",
           "request": {
             "method": "GET",
@@ -623,7 +739,8 @@
               "raw": "{{base_url}}/loads/{{load_id}}",
               "host": ["{{base_url}}"],
               "path": ["loads", "{{load_id}}"]
-            }
+            },
+            "description": "Get load with populated paymentReceivable and paymentPayable"
           },
           "response": []
         },
@@ -632,9 +749,9 @@
           "request": {
             "method": "GET",
             "url": {
-              "raw": "{{base_url}}/loads/status/Listed?page=1&limit=10",
+              "raw": "{{base_url}}/loads/status/Delivered?page=1&limit=10",
               "host": ["{{base_url}}"],
-              "path": ["loads", "status", "Listed"],
+              "path": ["loads", "status", "Delivered"],
               "query": [
                 { "key": "page", "value": "1" },
                 { "key": "limit", "value": "10" }
@@ -644,55 +761,7 @@
           "response": []
         },
         {
-          "name": "Get Loads by Carrier",
-          "request": {
-            "method": "GET",
-            "url": {
-              "raw": "{{base_url}}/loads/carrier/{{carrier_id}}?page=1&limit=10",
-              "host": ["{{base_url}}"],
-              "path": ["loads", "carrier", "{{carrier_id}}"],
-              "query": [
-                { "key": "page", "value": "1" },
-                { "key": "limit", "value": "10" }
-              ]
-            }
-          },
-          "response": []
-        },
-        {
-          "name": "Get Loads by Customer",
-          "request": {
-            "method": "GET",
-            "url": {
-              "raw": "{{base_url}}/loads/customer/{{customer_id}}?page=1&limit=10",
-              "host": ["{{base_url}}"],
-              "path": ["loads", "customer", "{{customer_id}}"],
-              "query": [
-                { "key": "page", "value": "1" },
-                { "key": "limit", "value": "10" }
-              ]
-            }
-          },
-          "response": []
-        },
-        {
-          "name": "Get Load History",
-          "request": {
-            "method": "GET",
-            "url": {
-              "raw": "{{base_url}}/loads/{{load_id}}/history?page=1&limit=10",
-              "host": ["{{base_url}}"],
-              "path": ["loads", "{{load_id}}", "history"],
-              "query": [
-                { "key": "page", "value": "1" },
-                { "key": "limit", "value": "10" }
-              ]
-            }
-          },
-          "response": []
-        },
-        {
-          "name": "Create Load (with new Carrier and Customer)",
+          "name": "1. Create Load - Freight (New Customer & Carrier)",
           "request": {
             "method": "POST",
             "header": [],
@@ -701,27 +770,32 @@
               "formdata": [
                 {
                   "key": "customer",
-                  "value": "{\"companyName\":\"ABC Company\",\"customerAddress\":{\"address\":\"123 Main St\",\"city\":\"New York\",\"state\":\"NY\",\"zipCode\":\"10001\"},\"emails\":[\"customer@example.com\"],\"phoneNumber\":\"+1234567890\"}",
+                  "value": "{\"companyName\":\"ABC Logistics Inc\",\"customerAddress\":{\"address\":\"100 Commerce Blvd\",\"city\":\"Los Angeles\",\"state\":\"CA\",\"zipCode\":\"90001\"},\"emails\":[\"billing@abclogistics.com\",\"dispatch@abclogistics.com\"],\"phoneNumber\":\"+1 (310) 555-0101\",\"paymentMethod\":\"Net 30\",\"paymentTerms\":\"Payment due within 30 days\",\"creditLimit\":50000}",
                   "type": "text"
                 },
                 {
                   "key": "customerEmails",
-                  "value": "customer@example.com",
+                  "value": "updates@abclogistics.com",
                   "type": "text"
                 },
                 {
                   "key": "customerRate",
-                  "value": "1500",
+                  "value": "5500",
                   "type": "text"
                 },
                 {
                   "key": "carrier",
-                  "value": "{\"name\":\"John Doe\",\"companyName\":\"Doe Transport\",\"mcNumber\":\"MC123456\",\"phoneNumber\":\"+1122334455\",\"email\":\"carrier@example.com\",\"address\":{\"address\":\"321 Carrier Blvd\",\"city\":\"Dallas\",\"state\":\"TX\",\"zipCode\":\"75201\"}}",
+                  "value": "{\"name\":\"Mike Johnson\",\"companyName\":\"Fast Freight LLC\",\"mcNumber\":\"MC-789456\",\"dotNumber\":\"DOT-123789\",\"phoneNumber\":\"+1 (602) 555-0202\",\"email\":\"mike@fastfreight.com\",\"address\":{\"address\":\"500 Trucking Way\",\"city\":\"Phoenix\",\"state\":\"AZ\",\"zipCode\":\"85001\"},\"routing\":\"122105155\",\"bankAccount\":\"Chase Bank\",\"accountNumber\":\"987654321\",\"equipmentType\":\"Dry Van\",\"size\":\"53ft\"}",
                   "type": "text"
                 },
                 {
                   "key": "carrierEmails",
-                  "value": "carrier@example.com",
+                  "value": "dispatch@fastfreight.com",
+                  "type": "text"
+                },
+                {
+                  "key": "carrierRate",
+                  "value": "4200",
                   "type": "text"
                 },
                 {
@@ -731,17 +805,22 @@
                 },
                 {
                   "key": "freight",
-                  "value": "{\"shipment\":[{\"commodity\":\"Electronics\",\"dimensionsLength\":\"10\",\"dimensionsWidth\":\"5\",\"dimensionsHeight\":\"3\",\"weight\":\"500\",\"poNumber\":\"PO-12345\"}]}",
+                  "value": "{\"shipment\":[{\"commodity\":\"Electronics - TV Sets\",\"dimensionsLength\":\"48\",\"dimensionsWidth\":\"40\",\"dimensionsHeight\":\"48\",\"weight\":\"12000\",\"poNumber\":\"PO-2024-001\",\"pickupNumber\":\"PKU-55512\"}]}",
                   "type": "text"
                 },
                 {
                   "key": "pickup",
-                  "value": "{\"locationName\":\"Warehouse A\",\"address\":{\"address\":\"456 Pickup St\",\"city\":\"Los Angeles\",\"state\":\"CA\",\"zipCode\":\"90001\"},\"contactPhone\":\"+1987654321\",\"date\":\"2024-01-15\"}",
+                  "value": "{\"locationName\":\"Samsung Distribution Center\",\"address\":{\"address\":\"1000 Industrial Pkwy\",\"city\":\"Ontario\",\"state\":\"CA\",\"zipCode\":\"91761\"},\"contactPhone\":\"+1 (909) 555-1000\",\"notes\":\"Dock 15, appointment required. Call 30 min before arrival.\",\"date\":\"2024-12-15\"}",
                   "type": "text"
                 },
                 {
                   "key": "delivery",
-                  "value": "{\"locationName\":\"Store B\",\"address\":{\"address\":\"789 Delivery Ave\",\"city\":\"Chicago\",\"state\":\"IL\",\"zipCode\":\"60601\"},\"contactPhone\":\"+1555555555\",\"date\":\"2024-01-20\"}",
+                  "value": "{\"locationName\":\"Best Buy Regional Warehouse\",\"address\":{\"address\":\"2500 Retail Blvd\",\"city\":\"Dallas\",\"state\":\"TX\",\"zipCode\":\"75201\"},\"contactPhone\":\"+1 (214) 555-2500\",\"notes\":\"Receiving hours: 6AM-2PM. No weekend deliveries.\",\"date\":\"2024-12-18\"}",
+                  "type": "text"
+                },
+                {
+                  "key": "insurance",
+                  "value": "{\"type\":\"Full Coverage\",\"customAmount\":\"150000\"}",
                   "type": "text"
                 },
                 {
@@ -751,7 +830,7 @@
                 },
                 {
                   "key": "tracking",
-                  "value": "TRACK123456",
+                  "value": "TRACK-2024-1215-001",
                   "type": "text"
                 }
               ]
@@ -760,7 +839,8 @@
               "raw": "{{base_url}}/loads",
               "host": ["{{base_url}}"],
               "path": ["loads"]
-            }
+            },
+            "description": "Create FREIGHT load with new customer and carrier. Includes all payment info for both parties."
           },
           "response": [],
           "event": [
@@ -769,9 +849,6 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('Load creation handled', function () {",
-                  "  pm.expect([201, 400, 401, 403]).to.include(pm.response.code);",
-                  "});",
                   "if (pm.response.code === 201) {",
                   "  const jsonData = pm.response.json();",
                   "  const load = jsonData.data || {};",
@@ -791,7 +868,7 @@
           ]
         },
         {
-          "name": "Create Load (with existing Carrier and Customer)",
+          "name": "2. Create Load - Vehicle (Single Car)",
           "request": {
             "method": "POST",
             "header": [],
@@ -800,32 +877,47 @@
               "formdata": [
                 {
                   "key": "customer",
-                  "value": "{\"id\":\"{{customer_id}}\"}",
+                  "value": "{\"companyName\":\"AutoNation Dealership\",\"customerAddress\":{\"address\":\"8000 Auto Mall Dr\",\"city\":\"Miami\",\"state\":\"FL\",\"zipCode\":\"33101\"},\"emails\":[\"transport@autonation.com\"],\"phoneNumber\":\"+1 (305) 555-8000\",\"paymentMethod\":\"Net 15\"}",
+                  "type": "text"
+                },
+                {
+                  "key": "customerRate",
+                  "value": "1200",
                   "type": "text"
                 },
                 {
                   "key": "carrier",
-                  "value": "{\"id\":\"{{carrier_id}}\"}",
+                  "value": "{\"name\":\"Carlos Rodriguez\",\"companyName\":\"Premium Auto Transport\",\"mcNumber\":\"MC-555123\",\"phoneNumber\":\"+1 (954) 555-3333\",\"email\":\"carlos@premiumautotrans.com\",\"routing\":\"267084131\",\"bankAccount\":\"Bank of America\",\"accountNumber\":\"456789123\",\"equipmentType\":\"Open Car Hauler\",\"size\":\"3-car\"}",
+                  "type": "text"
+                },
+                {
+                  "key": "carrierRate",
+                  "value": "950",
                   "type": "text"
                 },
                 {
                   "key": "type",
-                  "value": "{\"freight\":true,\"vehicle\":false}",
+                  "value": "{\"freight\":false,\"vehicle\":true}",
                   "type": "text"
                 },
                 {
-                  "key": "freight",
-                  "value": "{\"shipment\":[{\"commodity\":\"Furniture\",\"dimensionsLength\":\"12\",\"dimensionsWidth\":\"8\",\"dimensionsHeight\":\"6\",\"weight\":\"1000\",\"poNumber\":\"PO-99999\"}]}",
+                  "key": "vehicle",
+                  "value": "{\"shipment\":[{\"vin\":\"5YJ3E1EA8LF123456\",\"make\":\"Tesla\",\"model\":\"Model 3\",\"year\":\"2024\",\"value\":\"45000\"}],\"specialRequirements\":\"Enclosed trailer preferred. No smoking.\"}",
                   "type": "text"
                 },
                 {
                   "key": "pickup",
-                  "value": "{\"locationName\":\"Warehouse\",\"address\":{\"address\":\"300 Pickup Rd\",\"city\":\"Orlando\",\"state\":\"FL\",\"zipCode\":\"32801\"},\"contactPhone\":\"+13055551111\",\"date\":\"2024-02-01\"}",
+                  "value": "{\"locationName\":\"Tesla Delivery Center\",\"address\":{\"address\":\"3500 Deer Creek Rd\",\"city\":\"Palo Alto\",\"state\":\"CA\",\"zipCode\":\"94304\"},\"contactPhone\":\"+1 (650) 555-3500\",\"notes\":\"Vehicle release number required\",\"date\":\"2024-12-16\"}",
                   "type": "text"
                 },
                 {
                   "key": "delivery",
-                  "value": "{\"locationName\":\"Store\",\"address\":{\"address\":\"400 Delivery Blvd\",\"city\":\"Jacksonville\",\"state\":\"FL\",\"zipCode\":\"32201\"},\"contactPhone\":\"+13055552222\",\"date\":\"2024-02-05\"}",
+                  "value": "{\"locationName\":\"Customer Residence\",\"address\":{\"address\":\"1234 Palm Beach Blvd\",\"city\":\"Miami Beach\",\"state\":\"FL\",\"zipCode\":\"33139\"},\"contactPhone\":\"+1 (305) 555-1234\",\"notes\":\"Gated community - call for gate code\",\"date\":\"2024-12-20\"}",
+                  "type": "text"
+                },
+                {
+                  "key": "insurance",
+                  "value": "{\"type\":\"Full Coverage\",\"customAmount\":\"50000\"}",
                   "type": "text"
                 },
                 {
@@ -839,7 +931,8 @@
               "raw": "{{base_url}}/loads",
               "host": ["{{base_url}}"],
               "path": ["loads"]
-            }
+            },
+            "description": "Create VEHICLE load - single car transport (Tesla Model 3)"
           },
           "response": [],
           "event": [
@@ -861,7 +954,7 @@
           ]
         },
         {
-          "name": "Create Load (Vehicle Type)",
+          "name": "3. Create Load - Vehicle (Multiple Cars)",
           "request": {
             "method": "POST",
             "header": [],
@@ -870,12 +963,22 @@
               "formdata": [
                 {
                   "key": "customer",
-                  "value": "{\"companyName\":\"Vehicle Customer Inc\",\"customerAddress\":{\"address\":\"100 Vehicle St\",\"city\":\"Miami\",\"state\":\"FL\",\"zipCode\":\"33101\"}}",
+                  "value": "{\"companyName\":\"Luxury Motors Group\",\"customerAddress\":{\"address\":\"5000 Luxury Lane\",\"city\":\"Beverly Hills\",\"state\":\"CA\",\"zipCode\":\"90210\"},\"emails\":[\"fleet@luxurymotors.com\"],\"phoneNumber\":\"+1 (310) 555-5000\",\"paymentMethod\":\"Wire\",\"creditLimit\":100000}",
+                  "type": "text"
+                },
+                {
+                  "key": "customerRate",
+                  "value": "8500",
                   "type": "text"
                 },
                 {
                   "key": "carrier",
-                  "value": "{\"name\":\"Vehicle Carrier\",\"mcNumber\":\"MC999999\"}",
+                  "value": "{\"name\":\"James Wilson\",\"companyName\":\"Elite Auto Carriers Inc\",\"mcNumber\":\"MC-888777\",\"dotNumber\":\"DOT-999888\",\"phoneNumber\":\"+1 (702) 555-8888\",\"email\":\"james@eliteautocarriers.com\",\"routing\":\"321081669\",\"bankAccount\":\"Wells Fargo\",\"accountNumber\":\"789456123\",\"equipmentType\":\"Enclosed Car Hauler\",\"size\":\"6-car\",\"certifications\":[\"Exotic Car Certified\",\"Climate Controlled\"]}",
+                  "type": "text"
+                },
+                {
+                  "key": "carrierRate",
+                  "value": "6800",
                   "type": "text"
                 },
                 {
@@ -885,17 +988,22 @@
                 },
                 {
                   "key": "vehicle",
-                  "value": "{\"shipment\":[{\"vin\":\"1HGBH41JXMN109186\",\"make\":\"Honda\",\"model\":\"Civic\",\"year\":\"2020\",\"value\":\"25000\"}],\"specialRequirements\":\"No smoking\"}",
+                  "value": "{\"shipment\":[{\"vin\":\"WDDWJ8KB1KF123001\",\"make\":\"Mercedes-Benz\",\"model\":\"S-Class S580\",\"year\":\"2024\",\"value\":\"120000\"},{\"vin\":\"WP0AB2A94NS123002\",\"make\":\"Porsche\",\"model\":\"911 Carrera\",\"year\":\"2024\",\"value\":\"135000\"},{\"vin\":\"ZHWUC1ZF8MLA12003\",\"make\":\"Lamborghini\",\"model\":\"Huracan EVO\",\"year\":\"2024\",\"value\":\"280000\"}],\"specialRequirements\":\"ENCLOSED ONLY. Climate controlled required. No stacking. White glove service.\"}",
                   "type": "text"
                 },
                 {
                   "key": "pickup",
-                  "value": "{\"locationName\":\"Dealership\",\"address\":{\"address\":\"500 Auto Ave\",\"city\":\"Tampa\",\"state\":\"FL\",\"zipCode\":\"33601\"},\"date\":\"2024-02-10\"}",
+                  "value": "{\"locationName\":\"Exotic Car Imports LA\",\"address\":{\"address\":\"1 Harbor Gateway\",\"city\":\"Long Beach\",\"state\":\"CA\",\"zipCode\":\"90802\"},\"contactPhone\":\"+1 (562) 555-1111\",\"notes\":\"Port pickup. Customs clearance required. Contact broker first.\",\"date\":\"2024-12-17\"}",
                   "type": "text"
                 },
                 {
                   "key": "delivery",
-                  "value": "{\"locationName\":\"Customer Location\",\"address\":{\"address\":\"600 Delivery St\",\"city\":\"Jacksonville\",\"state\":\"FL\",\"zipCode\":\"32201\"},\"date\":\"2024-02-15\"}",
+                  "value": "{\"locationName\":\"Luxury Motors Showroom\",\"address\":{\"address\":\"5000 Luxury Lane\",\"city\":\"Beverly Hills\",\"state\":\"CA\",\"zipCode\":\"90210\"},\"contactPhone\":\"+1 (310) 555-5001\",\"notes\":\"Underground garage. Height clearance 8ft. Call GM on arrival.\",\"date\":\"2024-12-18\"}",
+                  "type": "text"
+                },
+                {
+                  "key": "insurance",
+                  "value": "{\"type\":\"Premium\",\"customAmount\":\"600000\"}",
                   "type": "text"
                 },
                 {
@@ -909,14 +1017,250 @@
               "raw": "{{base_url}}/loads",
               "host": ["{{base_url}}"],
               "path": ["loads"]
-            }
+            },
+            "description": "Create VEHICLE load - multiple luxury/exotic cars (Mercedes, Porsche, Lamborghini)"
           },
-          "response": []
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "  const jsonData = pm.response.json();",
+                  "  const load = jsonData.data || {};",
+                  "  if (load.id || load._id) {",
+                  "    pm.environment.set('load_id', load.id || load._id);",
+                  "  }",
+                  "}"
+                ]
+              }
+            }
+          ]
         },
         {
-          "name": "Update Load",
+          "name": "4. Create Load - Freight (Multiple Shipments)",
           "request": {
-            "method": "PUT",
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "customer",
+                  "value": "{\"companyName\":\"Home Depot Distribution\",\"customerAddress\":{\"address\":\"2455 Paces Ferry Rd\",\"city\":\"Atlanta\",\"state\":\"GA\",\"zipCode\":\"30339\"},\"emails\":[\"logistics@homedepot.com\"],\"phoneNumber\":\"+1 (770) 555-2455\",\"paymentMethod\":\"Net 60\",\"creditLimit\":200000}",
+                  "type": "text"
+                },
+                {
+                  "key": "customerRate",
+                  "value": "3200",
+                  "type": "text"
+                },
+                {
+                  "key": "carrier",
+                  "value": "{\"name\":\"Robert Taylor\",\"companyName\":\"Reliable Freight Services\",\"mcNumber\":\"MC-456789\",\"dotNumber\":\"DOT-654321\",\"phoneNumber\":\"+1 (404) 555-4567\",\"email\":\"robert@reliablefreight.com\",\"routing\":\"061000104\",\"bankAccount\":\"SunTrust Bank\",\"accountNumber\":\"321654987\",\"equipmentType\":\"Flatbed\",\"size\":\"48ft\",\"capabilities\":[\"Tarping\",\"Chains\",\"Straps\"]}",
+                  "type": "text"
+                },
+                {
+                  "key": "carrierRate",
+                  "value": "2600",
+                  "type": "text"
+                },
+                {
+                  "key": "type",
+                  "value": "{\"freight\":true,\"vehicle\":false}",
+                  "type": "text"
+                },
+                {
+                  "key": "freight",
+                  "value": "{\"shipment\":[{\"commodity\":\"Building Materials - Lumber\",\"dimensionsLength\":\"96\",\"dimensionsWidth\":\"48\",\"dimensionsHeight\":\"48\",\"weight\":\"22000\",\"poNumber\":\"HD-2024-5512\",\"pickupNumber\":\"PKU-88812\"},{\"commodity\":\"Roofing Shingles\",\"dimensionsLength\":\"48\",\"dimensionsWidth\":\"48\",\"dimensionsHeight\":\"36\",\"weight\":\"18000\",\"poNumber\":\"HD-2024-5513\",\"pickupNumber\":\"PKU-88813\"}]}",
+                  "type": "text"
+                },
+                {
+                  "key": "pickup",
+                  "value": "{\"locationName\":\"Georgia Pacific Mill\",\"address\":{\"address\":\"133 Peachtree St NE\",\"city\":\"Atlanta\",\"state\":\"GA\",\"zipCode\":\"30303\"},\"contactPhone\":\"+1 (404) 555-1333\",\"notes\":\"Scale required before departure. Tarp all loads.\",\"date\":\"2024-12-14\"}",
+                  "type": "text"
+                },
+                {
+                  "key": "delivery",
+                  "value": "{\"locationName\":\"Home Depot Store #1234\",\"address\":{\"address\":\"5555 Construction Ave\",\"city\":\"Nashville\",\"state\":\"TN\",\"zipCode\":\"37201\"},\"contactPhone\":\"+1 (615) 555-5555\",\"notes\":\"Forklift on site. Stack in lumber yard section.\",\"date\":\"2024-12-15\"}",
+                  "type": "text"
+                },
+                {
+                  "key": "status",
+                  "value": "Listed",
+                  "type": "text"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{base_url}}/loads",
+              "host": ["{{base_url}}"],
+              "path": ["loads"]
+            },
+            "description": "Create FREIGHT load with multiple shipments (different commodities)"
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "  const jsonData = pm.response.json();",
+                  "  const load = jsonData.data || {};",
+                  "  if (load.id || load._id) {",
+                  "    pm.environment.set('load_id', load.id || load._id);",
+                  "  }",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "5. Create Load - With Existing Customer & Carrier",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "customer",
+                  "value": "{\"id\":\"{{customer_id}}\"}",
+                  "type": "text"
+                },
+                {
+                  "key": "customerRate",
+                  "value": "4500",
+                  "type": "text"
+                },
+                {
+                  "key": "carrier",
+                  "value": "{\"id\":\"{{carrier_id}}\"}",
+                  "type": "text"
+                },
+                {
+                  "key": "carrierRate",
+                  "value": "3600",
+                  "type": "text"
+                },
+                {
+                  "key": "type",
+                  "value": "{\"freight\":true,\"vehicle\":false}",
+                  "type": "text"
+                },
+                {
+                  "key": "freight",
+                  "value": "{\"shipment\":[{\"commodity\":\"Furniture\",\"dimensionsLength\":\"84\",\"dimensionsWidth\":\"48\",\"dimensionsHeight\":\"60\",\"weight\":\"8000\",\"poNumber\":\"FURN-2024-099\"}]}",
+                  "type": "text"
+                },
+                {
+                  "key": "pickup",
+                  "value": "{\"locationName\":\"IKEA Distribution\",\"address\":{\"address\":\"1 IKEA Way\",\"city\":\"Elizabeth\",\"state\":\"NJ\",\"zipCode\":\"07201\"},\"contactPhone\":\"+1 (908) 555-4532\",\"date\":\"2024-12-19\"}",
+                  "type": "text"
+                },
+                {
+                  "key": "delivery",
+                  "value": "{\"locationName\":\"Furniture Warehouse\",\"address\":{\"address\":\"800 Market St\",\"city\":\"Philadelphia\",\"state\":\"PA\",\"zipCode\":\"19107\"},\"contactPhone\":\"+1 (215) 555-8000\",\"date\":\"2024-12-20\"}",
+                  "type": "text"
+                },
+                {
+                  "key": "status",
+                  "value": "Listed",
+                  "type": "text"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{base_url}}/loads",
+              "host": ["{{base_url}}"],
+              "path": ["loads"]
+            },
+            "description": "Create load using EXISTING customer and carrier IDs from environment variables"
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "  const jsonData = pm.response.json();",
+                  "  const load = jsonData.data || {};",
+                  "  if (load.id || load._id) {",
+                  "    pm.environment.set('load_id', load.id || load._id);",
+                  "  }",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "6. Create Load - Minimal (Only Required Fields)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "customer",
+                  "value": "{\"companyName\":\"Quick Test Customer\",\"customerAddress\":{\"city\":\"New York\",\"state\":\"NY\"}}",
+                  "type": "text"
+                },
+                {
+                  "key": "customerRate",
+                  "value": "1000",
+                  "type": "text"
+                },
+                {
+                  "key": "type",
+                  "value": "{\"freight\":true,\"vehicle\":false}",
+                  "type": "text"
+                },
+                {
+                  "key": "status",
+                  "value": "Listed",
+                  "type": "text"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{base_url}}/loads",
+              "host": ["{{base_url}}"],
+              "path": ["loads"]
+            },
+            "description": "Create load with MINIMAL data - only required fields (customer companyName, address, rate)"
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "  const jsonData = pm.response.json();",
+                  "  const load = jsonData.data || {};",
+                  "  if (load.id || load._id) {",
+                  "    pm.environment.set('load_id', load.id || load._id);",
+                  "  }",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "7. Create Load - JSON Body (Alternative)",
+          "request": {
+            "method": "POST",
             "header": [
               {
                 "key": "Content-Type",
@@ -925,46 +1269,122 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"status\": \"Dispatched\",\n  \"dates\": {\n    \"assignedDate\": \"2024-01-12\",\n    \"pickupDate\": \"2024-01-15\"\n  }\n}"
+              "raw": "{\n  \"customer\": {\n    \"companyName\": \"JSON Test Customer\",\n    \"customerAddress\": {\n      \"address\": \"999 JSON Street\",\n      \"city\": \"San Francisco\",\n      \"state\": \"CA\",\n      \"zipCode\": \"94102\"\n    },\n    \"emails\": [\"json@test.com\"],\n    \"paymentMethod\": \"ACH\"\n  },\n  \"customerRate\": \"2500\",\n  \"carrier\": {\n    \"name\": \"JSON Carrier\",\n    \"companyName\": \"JSON Transport LLC\",\n    \"mcNumber\": \"MC-JSON-001\",\n    \"email\": \"json-carrier@test.com\",\n    \"routing\": \"111222333\",\n    \"bankAccount\": \"Test Bank\",\n    \"accountNumber\": \"999888777\"\n  },\n  \"carrierRate\": \"2000\",\n  \"type\": {\n    \"freight\": true,\n    \"vehicle\": false\n  },\n  \"freight\": {\n    \"shipment\": [\n      {\n        \"commodity\": \"Test Goods\",\n        \"weight\": \"5000\",\n        \"poNumber\": \"JSON-PO-001\"\n      }\n    ]\n  },\n  \"pickup\": {\n    \"locationName\": \"JSON Pickup\",\n    \"address\": {\n      \"city\": \"San Francisco\",\n      \"state\": \"CA\"\n    },\n    \"date\": \"2024-12-20\"\n  },\n  \"delivery\": {\n    \"locationName\": \"JSON Delivery\",\n    \"address\": {\n      \"city\": \"Los Angeles\",\n      \"state\": \"CA\"\n    },\n    \"date\": \"2024-12-22\"\n  },\n  \"status\": \"Listed\"\n}"
             },
             "url": {
-              "raw": "{{base_url}}/loads/{{load_id}}",
+              "raw": "{{base_url}}/loads",
               "host": ["{{base_url}}"],
-              "path": ["loads", "{{load_id}}"]
-            }
+              "path": ["loads"]
+            },
+            "description": "Create load using JSON body instead of form-data (alternative method)"
           },
-          "response": []
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "  const jsonData = pm.response.json();",
+                  "  const load = jsonData.data || {};",
+                  "  if (load.id || load._id) {",
+                  "    pm.environment.set('load_id', load.id || load._id);",
+                  "  }",
+                  "}"
+                ]
+              }
+            }
+          ]
         },
         {
-          "name": "Update Load (Full / with files)",
+          "name": "8. Create Load - Dispatched Status",
           "request": {
-            "method": "PUT",
+            "method": "POST",
             "header": [],
             "body": {
               "mode": "formdata",
               "formdata": [
                 {
+                  "key": "customer",
+                  "value": "{\"companyName\":\"Dispatched Test Co\",\"customerAddress\":{\"city\":\"Chicago\",\"state\":\"IL\"},\"paymentMethod\":\"Net 30\"}",
+                  "type": "text"
+                },
+                {
+                  "key": "customerRate",
+                  "value": "3000",
+                  "type": "text"
+                },
+                {
+                  "key": "carrier",
+                  "value": "{\"name\":\"Ready Carrier\",\"companyName\":\"Ready Transport\",\"mcNumber\":\"MC-READY-01\",\"email\":\"ready@transport.com\",\"routing\":\"555444333\",\"bankAccount\":\"Ready Bank\",\"accountNumber\":\"111222333\"}",
+                  "type": "text"
+                },
+                {
+                  "key": "carrierRate",
+                  "value": "2400",
+                  "type": "text"
+                },
+                {
+                  "key": "type",
+                  "value": "{\"freight\":true,\"vehicle\":false}",
+                  "type": "text"
+                },
+                {
+                  "key": "freight",
+                  "value": "{\"shipment\":[{\"commodity\":\"General Goods\",\"weight\":\"10000\"}]}",
+                  "type": "text"
+                },
+                {
+                  "key": "pickup",
+                  "value": "{\"locationName\":\"Warehouse\",\"address\":{\"city\":\"Chicago\",\"state\":\"IL\"},\"date\":\"2024-12-16\"}",
+                  "type": "text"
+                },
+                {
+                  "key": "delivery",
+                  "value": "{\"locationName\":\"Store\",\"address\":{\"city\":\"Detroit\",\"state\":\"MI\"},\"date\":\"2024-12-17\"}",
+                  "type": "text"
+                },
+                {
                   "key": "status",
-                  "value": "Picked up",
+                  "value": "Dispatched",
                   "type": "text"
                 },
                 {
                   "key": "dates",
-                  "value": "{\"pickupDate\":\"2024-01-16\"}",
+                  "value": "{\"assignedDate\":\"2024-12-15\"}",
                   "type": "text"
                 }
               ]
             },
             "url": {
-              "raw": "{{base_url}}/loads/{{load_id}}/full",
+              "raw": "{{base_url}}/loads",
               "host": ["{{base_url}}"],
-              "path": ["loads", "{{load_id}}", "full"]
-            }
+              "path": ["loads"]
+            },
+            "description": "Create load with DISPATCHED status (carrier already assigned)"
           },
-          "response": []
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "  const jsonData = pm.response.json();",
+                  "  const load = jsonData.data || {};",
+                  "  if (load.id || load._id) {",
+                  "    pm.environment.set('load_id', load.id || load._id);",
+                  "  }",
+                  "}"
+                ]
+              }
+            }
+          ]
         },
         {
-          "name": "Update Load Status",
+          "name": "Update Load Status to Delivered",
           "request": {
             "method": "PUT",
             "header": [
@@ -981,9 +1401,30 @@
               "raw": "{{base_url}}/loads/{{load_id}}/status",
               "host": ["{{base_url}}"],
               "path": ["loads", "{{load_id}}", "status"]
-            }
+            },
+            "description": "When status changes to 'Delivered', PaymentReceivable and PaymentPayable are created automatically"
           },
-          "response": []
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "  const jsonData = pm.response.json();",
+                  "  const load = jsonData.data || {};",
+                  "  if (load.paymentReceivable && load.paymentReceivable.id) {",
+                  "    pm.environment.set('receivable_id', load.paymentReceivable.id);",
+                  "  }",
+                  "  if (load.paymentPayable && load.paymentPayable.id) {",
+                  "    pm.environment.set('payable_id', load.paymentPayable.id);",
+                  "  }",
+                  "}"
+                ]
+              }
+            }
+          ]
         },
         {
           "name": "Delete Load",
@@ -996,15 +1437,82 @@
             }
           },
           "response": []
-        },
+        }
+      ]
+    },
+    {
+      "name": "Payments - Receivable (from Customer)",
+      "description": "Payment Receivable - платежи получаемые от customers. Создаются автоматически при переходе Load в статус 'Delivered'.",
+      "item": [
         {
-          "name": "Generate BOL PDF",
+          "name": "List All Receivables",
           "request": {
             "method": "GET",
             "url": {
-              "raw": "{{base_url}}/loads/{{load_id}}/bol",
+              "raw": "{{base_url}}/payments/receivable?page=1&limit=20",
               "host": ["{{base_url}}"],
-              "path": ["loads", "{{load_id}}", "bol"]
+              "path": ["payments", "receivable"],
+              "query": [
+                { "key": "page", "value": "1" },
+                { "key": "limit", "value": "20" }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Receivable by ID",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/payments/receivable/{{receivable_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["payments", "receivable", "{{receivable_id}}"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Receivables by Status",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/payments/receivable/status/Pending?page=1&limit=10",
+              "host": ["{{base_url}}"],
+              "path": ["payments", "receivable", "status", "Pending"],
+              "query": [
+                { "key": "page", "value": "1" },
+                { "key": "limit", "value": "10" }
+              ]
+            },
+            "description": "Status: Pending, Invoiced, Partial, Paid, Overdue, Cancelled"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Receivables by Customer",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/payments/receivable/customer/{{customer_id}}?page=1&limit=10",
+              "host": ["{{base_url}}"],
+              "path": ["payments", "receivable", "customer", "{{customer_id}}"],
+              "query": [
+                { "key": "page", "value": "1" },
+                { "key": "limit", "value": "10" }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Receivable by Load",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/payments/receivable/load/{{load_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["payments", "receivable", "load", "{{load_id}}"]
             }
           },
           "response": [],
@@ -1016,8 +1524,9 @@
                 "exec": [
                   "if (pm.response.code === 200) {",
                   "  const jsonData = pm.response.json();",
-                  "  if (jsonData.data && jsonData.data.filename) {",
-                  "    pm.environment.set('pdf_filename', jsonData.data.filename);",
+                  "  const payment = jsonData.data || {};",
+                  "  if (payment.id || payment._id) {",
+                  "    pm.environment.set('receivable_id', payment.id || payment._id);",
                   "  }",
                   "}"
                 ]
@@ -1026,38 +1535,481 @@
           ]
         },
         {
-          "name": "Generate Rate Confirmation PDF",
+          "name": "Get Overdue Receivables",
           "request": {
             "method": "GET",
             "url": {
-              "raw": "{{base_url}}/loads/{{load_id}}/rate-confirmation",
+              "raw": "{{base_url}}/payments/receivable/overdue?page=1&limit=10",
               "host": ["{{base_url}}"],
-              "path": ["loads", "{{load_id}}", "rate-confirmation"]
+              "path": ["payments", "receivable", "overdue"],
+              "query": [
+                { "key": "page", "value": "1" },
+                { "key": "limit", "value": "10" }
+              ]
             }
           },
           "response": []
         },
         {
-          "name": "Generate All Documents",
+          "name": "Get Receivables Stats",
           "request": {
             "method": "GET",
             "url": {
-              "raw": "{{base_url}}/loads/{{load_id}}/documents",
+              "raw": "{{base_url}}/payments/receivable/stats",
               "host": ["{{base_url}}"],
-              "path": ["loads", "{{load_id}}", "documents"]
+              "path": ["payments", "receivable", "stats"]
+            },
+            "description": "Get statistics: by status, overdue, totals"
+          },
+          "response": []
+        },
+        {
+          "name": "Create Invoice",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"dueDate\": \"2025-01-15\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/payments/receivable/{{receivable_id}}/invoice",
+              "host": ["{{base_url}}"],
+              "path": ["payments", "receivable", "{{receivable_id}}", "invoice"]
+            },
+            "description": "Create invoice - sets status to 'Invoiced', generates invoice number, sets due date (default 30 days)"
+          },
+          "response": []
+        },
+        {
+          "name": "Update Additional Charges",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"tonu\": 150,\n  \"detention\": 200,\n  \"layover\": 100,\n  \"other\": 50,\n  \"notes\": \"Additional charges for delays\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/payments/receivable/{{receivable_id}}/charges",
+              "host": ["{{base_url}}"],
+              "path": ["payments", "receivable", "{{receivable_id}}", "charges"]
+            },
+            "description": "Update additional charges from customer (TONU, detention, layover, other)"
+          },
+          "response": []
+        },
+        {
+          "name": "Record Payment from Customer",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"amount\": 2500,\n  \"paymentMethod\": \"Wire\",\n  \"transactionReference\": \"TXN-123456\",\n  \"notes\": \"Partial payment received\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/payments/receivable/{{receivable_id}}/payment",
+              "host": ["{{base_url}}"],
+              "path": ["payments", "receivable", "{{receivable_id}}", "payment"]
+            },
+            "description": "Record payment received from customer. Status changes to 'Partial' or 'Paid' based on amount"
+          },
+          "response": []
+        },
+        {
+          "name": "Update Receivable",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"On Hold\",\n  \"notes\": \"Disputed by customer\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/payments/receivable/{{receivable_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["payments", "receivable", "{{receivable_id}}"]
             }
           },
           "response": []
         },
         {
-          "name": "Download Generated PDF",
+          "name": "Get Receivable Documents",
           "request": {
             "method": "GET",
             "url": {
-              "raw": "{{base_url}}/loads/download/{{pdf_filename}}",
+              "raw": "{{base_url}}/payments/receivable/{{receivable_id}}/documents",
               "host": ["{{base_url}}"],
-              "path": ["loads", "download", "{{pdf_filename}}"]
+              "path": ["payments", "receivable", "{{receivable_id}}", "documents"]
+            },
+            "description": "Get list of documents attached to this receivable"
+          },
+          "response": []
+        },
+        {
+          "name": "Upload Document to Receivable",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "description": "Document file (PDF, JPEG, PNG, DOC, DOCX, XLS, XLSX)"
+                },
+                {
+                  "key": "description",
+                  "value": "Payment receipt from customer",
+                  "type": "text"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{base_url}}/payments/receivable/{{receivable_id}}/documents",
+              "host": ["{{base_url}}"],
+              "path": ["payments", "receivable", "{{receivable_id}}", "documents"]
+            },
+            "description": "Upload a document (receipt, invoice, proof of payment) to receivable. Max 10MB."
+          },
+          "response": []
+        },
+        {
+          "name": "Delete Document from Receivable",
+          "request": {
+            "method": "DELETE",
+            "url": {
+              "raw": "{{base_url}}/payments/receivable/{{receivable_id}}/documents/{{document_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["payments", "receivable", "{{receivable_id}}", "documents", "{{document_id}}"]
+            },
+            "description": "Delete a document from receivable"
+          },
+          "response": []
+        },
+        {
+          "name": "Delete Receivable",
+          "request": {
+            "method": "DELETE",
+            "url": {
+              "raw": "{{base_url}}/payments/receivable/{{receivable_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["payments", "receivable", "{{receivable_id}}"]
+            },
+            "description": "Delete receivable (admin only)"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Payments - Payable (to Carrier)",
+      "description": "Payment Payable - платежи выплачиваемые carriers. Создаются автоматически при переходе Load в статус 'Delivered'.",
+      "item": [
+        {
+          "name": "List All Payables",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/payments/payable?page=1&limit=20",
+              "host": ["{{base_url}}"],
+              "path": ["payments", "payable"],
+              "query": [
+                { "key": "page", "value": "1" },
+                { "key": "limit", "value": "20" }
+              ]
             }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Payable by ID",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/payments/payable/{{payable_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["payments", "payable", "{{payable_id}}"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Payables by Status",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/payments/payable/status/Pending?page=1&limit=10",
+              "host": ["{{base_url}}"],
+              "path": ["payments", "payable", "status", "Pending"],
+              "query": [
+                { "key": "page", "value": "1" },
+                { "key": "limit", "value": "10" }
+              ]
+            },
+            "description": "Status: Pending, Scheduled, Partial, Paid, On Hold, Cancelled"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Payables by Carrier",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/payments/payable/carrier/{{carrier_id}}?page=1&limit=10",
+              "host": ["{{base_url}}"],
+              "path": ["payments", "payable", "carrier", "{{carrier_id}}"],
+              "query": [
+                { "key": "page", "value": "1" },
+                { "key": "limit", "value": "10" }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Payable by Load",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/payments/payable/load/{{load_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["payments", "payable", "load", "{{load_id}}"]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "  const jsonData = pm.response.json();",
+                  "  const payment = jsonData.data || {};",
+                  "  if (payment.id || payment._id) {",
+                  "    pm.environment.set('payable_id', payment.id || payment._id);",
+                  "  }",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Payables Stats",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/payments/payable/stats",
+              "host": ["{{base_url}}"],
+              "path": ["payments", "payable", "stats"]
+            },
+            "description": "Get statistics: by status, totals"
+          },
+          "response": []
+        },
+        {
+          "name": "Schedule Payment",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"scheduledDate\": \"2025-01-10\",\n  \"paymentMethod\": \"ACH\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/payments/payable/{{payable_id}}/schedule",
+              "host": ["{{base_url}}"],
+              "path": ["payments", "payable", "{{payable_id}}", "schedule"]
+            },
+            "description": "Schedule payment to carrier. Payment methods: ACH, Wire, Check, QuickPay, Factoring, Other"
+          },
+          "response": []
+        },
+        {
+          "name": "Update Additional Payments",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"tonu\": 100,\n  \"detention\": 150,\n  \"layover\": 75,\n  \"other\": 25,\n  \"notes\": \"Additional payments for waiting time\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/payments/payable/{{payable_id}}/additional",
+              "host": ["{{base_url}}"],
+              "path": ["payments", "payable", "{{payable_id}}", "additional"]
+            },
+            "description": "Update additional payments to carrier (TONU, detention, layover, other)"
+          },
+          "response": []
+        },
+        {
+          "name": "Update Deductions",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"quickPayFee\": 75,\n  \"factoringFee\": 50,\n  \"otherDeductions\": 25,\n  \"deductionNotes\": \"Quick pay 2% fee + damage claim\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/payments/payable/{{payable_id}}/deductions",
+              "host": ["{{base_url}}"],
+              "path": ["payments", "payable", "{{payable_id}}", "deductions"]
+            },
+            "description": "Update deductions from carrier payment"
+          },
+          "response": []
+        },
+        {
+          "name": "Record Payment to Carrier",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"amount\": 4000,\n  \"paymentMethod\": \"ACH\",\n  \"transactionReference\": \"ACH-789012\",\n  \"notes\": \"Full payment sent\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/payments/payable/{{payable_id}}/payment",
+              "host": ["{{base_url}}"],
+              "path": ["payments", "payable", "{{payable_id}}", "payment"]
+            },
+            "description": "Record payment sent to carrier. Status changes to 'Partial' or 'Paid' based on netAmount"
+          },
+          "response": []
+        },
+        {
+          "name": "Update Payable",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"On Hold\",\n  \"notes\": \"Waiting for POD\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/payments/payable/{{payable_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["payments", "payable", "{{payable_id}}"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Payable Documents",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/payments/payable/{{payable_id}}/documents",
+              "host": ["{{base_url}}"],
+              "path": ["payments", "payable", "{{payable_id}}", "documents"]
+            },
+            "description": "Get list of documents attached to this payable"
+          },
+          "response": []
+        },
+        {
+          "name": "Upload Document to Payable",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "description": "Document file (PDF, JPEG, PNG, DOC, DOCX, XLS, XLSX)"
+                },
+                {
+                  "key": "description",
+                  "value": "Payment proof to carrier",
+                  "type": "text"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{base_url}}/payments/payable/{{payable_id}}/documents",
+              "host": ["{{base_url}}"],
+              "path": ["payments", "payable", "{{payable_id}}", "documents"]
+            },
+            "description": "Upload a document (receipt, rate confirmation, proof of payment) to payable. Max 10MB."
+          },
+          "response": []
+        },
+        {
+          "name": "Delete Document from Payable",
+          "request": {
+            "method": "DELETE",
+            "url": {
+              "raw": "{{base_url}}/payments/payable/{{payable_id}}/documents/{{document_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["payments", "payable", "{{payable_id}}", "documents", "{{document_id}}"]
+            },
+            "description": "Delete a document from payable"
+          },
+          "response": []
+        },
+        {
+          "name": "Delete Payable",
+          "request": {
+            "method": "DELETE",
+            "url": {
+              "raw": "{{base_url}}/payments/payable/{{payable_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["payments", "payable", "{{payable_id}}"]
+            },
+            "description": "Delete payable (admin only)"
           },
           "response": []
         }
@@ -1071,150 +2023,12 @@
           "request": {
             "method": "GET",
             "url": {
-              "raw": "{{base_url}}/stats/general?period=month&startDate={{start_date}}&endDate={{end_date}}",
+              "raw": "{{base_url}}/stats/general?period=month",
               "host": ["{{base_url}}"],
               "path": ["stats", "general"],
               "query": [
-                { "key": "period", "value": "month" },
-                { "key": "startDate", "value": "{{start_date}}" },
-                { "key": "endDate", "value": "{{end_date}}" }
+                { "key": "period", "value": "month" }
               ]
-            }
-          },
-          "response": []
-        },
-        {
-          "name": "Get User Stats",
-          "request": {
-            "method": "GET",
-            "url": {
-              "raw": "{{base_url}}/stats/user/{{stats_user_id}}?period=month&startDate={{start_date}}&endDate={{end_date}}",
-              "host": ["{{base_url}}"],
-              "path": ["stats", "user", "{{stats_user_id}}"],
-              "query": [
-                { "key": "period", "value": "month" },
-                { "key": "startDate", "value": "{{start_date}}" },
-                { "key": "endDate", "value": "{{end_date}}" }
-              ]
-            }
-          },
-          "response": []
-        },
-        {
-          "name": "Get All Users Stats",
-          "request": {
-            "method": "GET",
-            "url": {
-              "raw": "{{base_url}}/stats/users?period=month&startDate={{start_date}}&endDate={{end_date}}",
-              "host": ["{{base_url}}"],
-              "path": ["stats", "users"],
-              "query": [
-                { "key": "period", "value": "month" },
-                { "key": "startDate", "value": "{{start_date}}" },
-                { "key": "endDate", "value": "{{end_date}}" }
-              ]
-            }
-          },
-          "response": []
-        },
-        {
-          "name": "Get Detailed Stats",
-          "request": {
-            "method": "GET",
-            "url": {
-              "raw": "{{base_url}}/stats/detailed?startDate={{start_date}}&endDate={{end_date}}&userId={{stats_user_id}}",
-              "host": ["{{base_url}}"],
-              "path": ["stats", "detailed"],
-              "query": [
-                { "key": "startDate", "value": "{{start_date}}" },
-                { "key": "endDate", "value": "{{end_date}}" },
-                { "key": "userId", "value": "{{stats_user_id}}" }
-              ]
-            }
-          },
-          "response": []
-        },
-        {
-          "name": "Update Legacy Stats",
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"force\": false\n}"
-            },
-            "url": {
-              "raw": "{{base_url}}/stats/update",
-              "host": ["{{base_url}}"],
-              "path": ["stats", "update"]
-            }
-          },
-          "response": []
-        },
-        {
-          "name": "Update Cached Stats",
-          "request": {
-            "method": "POST",
-            "url": {
-              "raw": "{{base_url}}/stats/update-cached",
-              "host": ["{{base_url}}"],
-              "path": ["stats", "update-cached"]
-            }
-          },
-          "response": []
-        }
-      ]
-    },
-    {
-      "name": "Performance",
-      "item": [
-        {
-          "name": "Get Performance Stats",
-          "request": {
-            "method": "GET",
-            "url": {
-              "raw": "{{base_url}}/performance/stats",
-              "host": ["{{base_url}}"],
-              "path": ["performance", "stats"]
-            }
-          },
-          "response": []
-        },
-        {
-          "name": "Export Performance Metrics",
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"filename\": \"{{performance_export_filename}}\"\n}"
-            },
-            "url": {
-              "raw": "{{base_url}}/performance/export",
-              "host": ["{{base_url}}"],
-              "path": ["performance", "export"]
-            }
-          },
-          "response": []
-        },
-        {
-          "name": "Clear Performance Metrics",
-          "request": {
-            "method": "DELETE",
-            "url": {
-              "raw": "{{base_url}}/performance/clear",
-              "host": ["{{base_url}}"],
-              "path": ["performance", "clear"]
             }
           },
           "response": []

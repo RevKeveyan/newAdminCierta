@@ -33,8 +33,16 @@ class UniversalBaseController {
         ...filters
       } = req.query;
 
+      // Исключаем параметры пагинации и сортировки из фильтров
+      const filterParams = { ...filters };
+      delete filterParams.page;
+      delete filterParams.limit;
+      delete filterParams.sortBy;
+      delete filterParams.sortOrder;
+      delete filterParams.search;
+
       // Построение фильтра
-      const filter = this.buildFilter(filters, search);
+      const filter = this.buildFilter(filterParams, search);
       
       // Построение сортировки
       const sort = this.buildSort(sortBy, sortOrder);
@@ -456,12 +464,20 @@ class UniversalBaseController {
   buildFilter(filters, search) {
     const filter = {};
 
+    // Исключаем служебные параметры из фильтров
+    const excludedKeys = ['page', 'limit', 'sortBy', 'sortOrder', 'search'];
+
     // Добавление фильтров
     Object.keys(filters).forEach(key => {
+      // Пропускаем служебные параметры
+      if (excludedKeys.includes(key)) {
+        return;
+      }
+
       if (filters[key] !== undefined && filters[key] !== '') {
-        if (key.includes('Date') || key.includes('At')) {
-          // Обработка дат
-          if (filters[key].includes('to')) {
+        if (key.includes('Date') || (key.includes('At') && key !== 'sortBy' && key !== 'sortOrder')) {
+          // Обработка дат (но не sortBy/sortOrder)
+          if (typeof filters[key] === 'string' && filters[key].includes('to')) {
             const [start, end] = filters[key].split(' to ');
             filter[key] = {
               $gte: new Date(start),
@@ -588,6 +604,16 @@ class UniversalBaseController {
           errors.push({ field, message: `${field} must be a number` });
         }
       }
+
+      // Валидация enum значений
+      if (value !== undefined && rule.enum && Array.isArray(rule.enum)) {
+        if (!rule.enum.includes(value)) {
+          errors.push({ 
+            field, 
+            message: `${field} must be one of: ${rule.enum.join(', ')}` 
+          });
+        }
+      }
     });
 
     return {
@@ -651,18 +677,53 @@ class UniversalBaseController {
       return true;
     }
     
-    // Для строк - нормализуем пробелы и сравниваем
-    if (typeof oldValue === 'string' && typeof newValue === 'string') {
-      return oldValue.trim() !== newValue.trim();
+    // Нормализация ObjectId для сравнения
+    const normalizeObjectId = (value) => {
+      if (!value) return null;
+      // Если это ObjectId или имеет _id, возвращаем строковое представление
+      if (mongoose.Types.ObjectId.isValid(value)) {
+        return value.toString();
+      }
+      // Если это объект с _id (populated), используем _id
+      if (value && typeof value === 'object' && value._id) {
+        return value._id.toString();
+      }
+      return value;
+    };
+    
+    const normalizedOld = normalizeObjectId(oldValue);
+    const normalizedNew = normalizeObjectId(newValue);
+    
+    // Если после нормализации одно из значений стало null, сравниваем как есть
+    if (normalizedOld === null || normalizedNew === null) {
+      return normalizedOld !== normalizedNew;
     }
     
-    // Для объектов используем JSON.stringify
-    if (typeof oldValue === 'object' && typeof newValue === 'object') {
-      return JSON.stringify(oldValue) !== JSON.stringify(newValue);
+    // Для строк - нормализуем пробелы и сравниваем
+    if (typeof normalizedOld === 'string' && typeof normalizedNew === 'string') {
+      return normalizedOld.trim() !== normalizedNew.trim();
+    }
+    
+    // Для объектов используем JSON.stringify (после нормализации ObjectId)
+    if (typeof normalizedOld === 'object' && typeof normalizedNew === 'object') {
+      // Для массивов сравниваем по содержимому
+      if (Array.isArray(normalizedOld) && Array.isArray(normalizedNew)) {
+        if (normalizedOld.length !== normalizedNew.length) {
+          return true;
+        }
+        // Сравниваем каждый элемент
+        for (let i = 0; i < normalizedOld.length; i++) {
+          if (this.compareValues(normalizedOld[i], normalizedNew[i])) {
+            return true;
+          }
+        }
+        return false;
+      }
+      return JSON.stringify(normalizedOld) !== JSON.stringify(normalizedNew);
     }
     
     // Для примитивных типов простое сравнение
-    return oldValue !== newValue;
+    return normalizedOld !== normalizedNew;
   }
 
   /**

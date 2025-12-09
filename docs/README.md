@@ -101,29 +101,29 @@
 ## 📋 Основные API Endpoints
 
 ### Load (Грузы)
-- `POST /api/loads` - Создание Load
-- `GET /api/loads` - Список Loads (с пагинацией и фильтрацией)
-- `GET /api/loads/:id` - Получение Load по ID
-- `PUT /api/loads/:id` - Обновление Load
-- `PUT /api/loads/:id/full` - Полное обновление с файлами
-- `PUT /api/loads/:id/status` - Обновление статуса
-- `DELETE /api/loads/:id` - Удаление Load
-- `GET /api/loads/:id/bol` - Генерация BOL PDF
-- `GET /api/loads/:id/history` - История изменений
+- `POST /loads` - Создание Load
+- `GET /loads` - Список Loads (с пагинацией и фильтрацией)
+- `GET /loads/:id` - Получение Load по ID
+- `PUT /loads/:id` - Обновление Load
+- `PUT /loads/:id/full` - Полное обновление с файлами
+- `PUT /loads/:id/status` - Обновление статуса
+- `DELETE /loads/:id` - Удаление Load
+- `GET /loads/:id/bol` - Генерация BOL PDF
+- `GET /loads/:id/history` - История изменений
 
 ### Carrier (Перевозчики)
-- `POST /api/carriers` - Создание Carrier
-- `GET /api/carriers` - Список Carriers
-- `GET /api/carriers/:id` - Получение Carrier по ID
-- `GET /api/carriers/search` - Поиск Carriers
-- `GET /api/carriers/:id/loads` - Loads для Carrier
+- `POST /carriers` - Создание Carrier
+- `GET /carriers` - Список Carriers
+- `GET /carriers/:id` - Получение Carrier по ID
+- `GET /carriers/search` - Поиск Carriers
+- `GET /carriers/:id/loads` - Loads для Carrier
 
 ### Customer (Клиенты)
-- `POST /api/customers` - Создание Customer
-- `GET /api/customers` - Список Customers
-- `GET /api/customers/:id` - Получение Customer по ID
-- `GET /api/customers/search` - Поиск Customers
-- `GET /api/customers/:id/loads` - Loads для Customer
+- `POST /customers` - Создание Customer
+- `GET /customers` - Список Customers
+- `GET /customers/:id` - Получение Customer по ID
+- `GET /customers/search` - Поиск Customers
+- `GET /customers/:id/loads` - Loads для Customer
 
 ---
 
@@ -157,7 +157,7 @@ formData.append('type', JSON.stringify({ freight: true, vehicle: false }));
 formData.append('pickup', JSON.stringify({ ... }));
 formData.append('delivery', JSON.stringify({ ... }));
 
-fetch('/api/loads', {
+fetch('/loads', {
   method: 'POST',
   body: formData
 });

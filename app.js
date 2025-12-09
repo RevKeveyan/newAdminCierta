@@ -47,7 +47,7 @@ const limiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
 });
-app.use('/api/', limiter);
+app.use('/', limiter);
 
 // Более строгий лимит для auth endpoints
 const authLimiter = rateLimit({
@@ -89,6 +89,7 @@ const authRoutes    = require("./routes/authRoutes");
 const performanceRoutes = require("./routes/performanceRoutes");
 const customerRoutes = require("./routes/customerRoutes");
 const carrierRoutes = require("./routes/carrierRoutes");
+const paymentRoutes = require("./routes/paymentRoutes");
 
 // Префиксуем API (рекомендовано, чтобы не конфликтовать со статикой)
 app.use("/loads", loadRoutes);
@@ -98,6 +99,7 @@ app.use("/auth", authRoutes);
 app.use("/performance", performanceRoutes);
 app.use("/customers", customerRoutes);
 app.use("/carriers", carrierRoutes);
+app.use("/payments", paymentRoutes);
 // Health-check (удобно для мониторинга/uptime-ботов)
 app.get("/health", (_req, res) => res.status(200).json({ ok: true }));
 

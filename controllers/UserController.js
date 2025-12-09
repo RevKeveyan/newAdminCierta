@@ -15,13 +15,38 @@ class UserController extends UniversalBaseController {
           lastName: { required: true, type: 'string' },
           email: { required: true, type: 'email' },
           password: { required: true, type: 'string' },
-          role: { required: true, type: 'string' }
+          role: { 
+            required: true, 
+            type: 'string',
+            enum: [
+              "admin",
+              "manager",
+              "accountingManager",
+              "accountingIn",
+              "accountingOut",
+              "dispatcher",
+              "partner",
+              "BidAgent",
+            ]
+          }
         },
         update: {
           firstName: { type: 'string' },
           lastName: { type: 'string' },
           email: { type: 'email' },
-          role: { type: 'string' }
+          role: { 
+            type: 'string',
+            enum: [
+              "admin",
+              "manager",
+              "accountingManager",
+              "accountingIn",
+              "accountingOut",
+              "dispatcher",
+              "partner",
+              "BidAgent",
+            ]
+          }
         }
       }
     });
@@ -50,7 +75,8 @@ class UserController extends UniversalBaseController {
       const newUser = new this.model({
         ...rest,
         password: hashedPassword,
-        profileImage: req.uploadedFiles?.[0] || null
+        profileImage: req.uploadedUserFiles?.profileImage || req.uploadedFiles?.[0] || null,
+        userFile: req.uploadedUserFiles?.userFile || null
       });
 
       const saved = await newUser.save();
@@ -104,6 +130,23 @@ class UserController extends UniversalBaseController {
       // Фильтруем только измененные поля
       const updateData = this.filterChangedFields(existingUser, req.body);
       
+      // Обработка пароля
+      if (updateData.password) {
+        updateData.password = await bcrypt.hash(updateData.password, 8);
+      }
+      
+      // Обработка изображения профиля
+      if (req.uploadedUserFiles?.profileImage) {
+        updateData.profileImage = req.uploadedUserFiles.profileImage;
+      } else if (req.uploadedFiles?.[0]) {
+        updateData.profileImage = req.uploadedFiles[0];
+      }
+
+      // Обработка PDF файла пользователя
+      if (req.uploadedUserFiles?.userFile) {
+        updateData.userFile = req.uploadedUserFiles.userFile;
+      }
+
       // Если нет изменений, возвращаем существующего пользователя
       if (Object.keys(updateData).length === 0) {
         const formattedUser = this.dto ? this.dto.format(existingUser) : existingUser;
@@ -112,16 +155,6 @@ class UserController extends UniversalBaseController {
           data: formattedUser,
           message: 'No changes detected'
         });
-      }
-      
-      // Обработка пароля
-      if (updateData.password) {
-        updateData.password = await bcrypt.hash(updateData.password, 8);
-      }
-      
-      // Обработка изображения
-      if (req.uploadedFiles?.[0]) {
-        updateData.profileImage = req.uploadedFiles[0];
       }
 
       const updated = await this.model.findByIdAndUpdate(
@@ -266,6 +299,23 @@ class UserController extends UniversalBaseController {
       // Фильтруем только измененные поля
       const updateData = this.filterChangedFields(existingUser, req.body);
       
+      // Обработка пароля
+      if (updateData.password) {
+        updateData.password = await bcrypt.hash(updateData.password, 8);
+      }
+      
+      // Обработка изображения профиля
+      if (req.uploadedUserFiles?.profileImage) {
+        updateData.profileImage = req.uploadedUserFiles.profileImage;
+      } else if (req.uploadedFiles?.[0]) {
+        updateData.profileImage = req.uploadedFiles[0];
+      }
+
+      // Обработка PDF файла пользователя
+      if (req.uploadedUserFiles?.userFile) {
+        updateData.userFile = req.uploadedUserFiles.userFile;
+      }
+
       // Если нет изменений, возвращаем существующего пользователя
       if (Object.keys(updateData).length === 0) {
         const formattedUser = this.dto ? this.dto.format(existingUser) : existingUser;
@@ -274,16 +324,6 @@ class UserController extends UniversalBaseController {
           data: formattedUser,
           message: 'No changes detected'
         });
-      }
-      
-      // Обработка пароля
-      if (updateData.password) {
-        updateData.password = await bcrypt.hash(updateData.password, 8);
-      }
-      
-      // Обработка изображения
-      if (req.uploadedFiles?.[0]) {
-        updateData.profileImage = req.uploadedFiles[0];
       }
 
       const updated = await this.model.findByIdAndUpdate(
@@ -301,6 +341,43 @@ class UserController extends UniversalBaseController {
       });
     } catch (error) {
       this.handleError(res, error, 'Failed to update profile');
+    }
+  };
+
+  // Remove user file (PDF)
+  removeUserFile = async (req, res) => {
+    try {
+      const { id } = req.params;
+
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        return res.status(400).json({
+          success: false,
+          error: 'Invalid ID format'
+        });
+      }
+
+      const updated = await this.model.findByIdAndUpdate(
+        id,
+        { $unset: { userFile: 1 } },
+        { new: true }
+      );
+
+      if (!updated) {
+        return res.status(404).json({
+          success: false,
+          error: 'User not found'
+        });
+      }
+
+      const formattedUser = this.dto ? this.dto.format(updated) : updated;
+
+      res.status(200).json({
+        success: true,
+        data: formattedUser,
+        message: 'User file removed successfully'
+      });
+    } catch (error) {
+      this.handleError(res, error, 'Failed to remove user file');
     }
   };
 

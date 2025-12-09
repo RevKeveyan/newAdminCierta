@@ -11,16 +11,22 @@ const carrierSchema = new mongoose.Schema({
   },
   email: {
     type: String,
-    lowercase: true
+    lowercase: true,
+    unique: true,
+    sparse: true // Allows multiple null/undefined values
   },
   companyName: {
     type: String
   },
   mcNumber: {
-    type: String
+    type: String,
+    unique: true,
+    sparse: true // Allows multiple null/undefined values
   },
   dotNumber: {
-    type: String
+    type: String,
+    unique: true,
+    sparse: true // Allows multiple null/undefined values
   },
   address: {
     type: addressSchema
@@ -28,7 +34,8 @@ const carrierSchema = new mongoose.Schema({
   // Дополнительные поля
   emails: [{
     type: String,
-    lowercase: true
+    lowercase: true,
+    unique: true,
   }],
   photos: [String],
   // Информация об оборудовании и возможностях
@@ -44,6 +51,30 @@ const carrierSchema = new mongoose.Schema({
   certifications: [{
     type: String
   }],
+  
+  // Банковские реквизиты для выплат
+  routing: {
+    type: String,
+    trim: true
+  },
+  bankAccount: {
+    type: String,
+    trim: true
+  },
+  accountNumber: {
+    type: String,
+    trim: true
+  },
+  
+  // Files organized by type
+  images: [String],  // Array of image URLs
+  pdfs: [String],    // Array of PDF URLs
+  
+  // Legacy field for backward compatibility
+  file: {
+    type: String
+  },
+  
   // Связь с Loads
   loads: [{
     type: mongoose.Schema.Types.ObjectId,
@@ -53,8 +84,9 @@ const carrierSchema = new mongoose.Schema({
 
 // Индексы для быстрого поиска
 carrierSchema.index({ name: 1 });
-carrierSchema.index({ mcNumber: 1 });
-carrierSchema.index({ dotNumber: 1 });
+carrierSchema.index({ mcNumber: 1 }, { unique: true, sparse: true });
+carrierSchema.index({ dotNumber: 1 }, { unique: true, sparse: true });
+carrierSchema.index({ email: 1 }, { unique: true, sparse: true });
 carrierSchema.index({ companyName: 1 });
 
 module.exports = mongoose.model("Carrier", carrierSchema);

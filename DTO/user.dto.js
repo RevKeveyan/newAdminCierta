@@ -10,6 +10,7 @@ function mapUser(user) {
     companyName: user.companyName,
     status: user.status,
     profileImage: user.profileImage,
+    userFile: user.userFile,
     createdAt: user.createdAt,
     updatedAt: user.updatedAt
   };

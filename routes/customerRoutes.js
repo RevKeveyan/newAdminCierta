@@ -3,8 +3,9 @@ const router = express.Router();
 const CustomerController = require('../controllers/CustomerController');
 const { verifyToken } = require('../middlewares/authMiddleware');
 const { checkRole } = require('../middlewares/roleMiddleware');
+const { uploadEntityFile } = require('../middlewares/uploadMiddleware');
 
-// 🔍 GET /api/customers - get all customers
+// 🔍 GET /customers - get all customers
 router.get(
   '/',
   // verifyToken,
@@ -12,7 +13,7 @@ router.get(
   CustomerController.getAll
 );
 
-// 🔍 GET /api/customers/search - search customers
+// 🔍 GET /customers/search - search customers
 router.get(
   '/search',
   // verifyToken,
@@ -20,7 +21,7 @@ router.get(
   CustomerController.search
 );
 
-// 🔍 GET /api/customers/:id - get customer by ID
+// 🔍 GET /customers/:id - get customer by ID
 router.get(
   '/:id',
   // verifyToken,
@@ -28,7 +29,7 @@ router.get(
   CustomerController.getById
 );
 
-// 🔍 GET /api/customers/:id/loads - get all loads for customer
+// 🔍 GET /customers/:id/loads - get all loads for customer
 router.get(
   '/:id/loads',
   // verifyToken,
@@ -36,23 +37,35 @@ router.get(
   CustomerController.getCustomerLoads
 );
 
-// ➕ POST /api/customers - create customer
+// ➕ POST /customers - create customer
+// Supports: file (PDF)
 router.post(
   '/',
   // verifyToken,
   // checkRole(['admin', 'dispatcher']),
+  uploadEntityFile('customers'),
   CustomerController.create
 );
 
-// ✏️ PUT /api/customers/:id - update customer
+// ✏️ PUT /customers/:id - update customer
+// Supports: file (PDF)
 router.put(
   '/:id',
   // verifyToken,
   // checkRole(['admin', 'dispatcher']),
+  uploadEntityFile('customers'),
   CustomerController.update
 );
 
-// ❌ DELETE /api/customers/:id - delete customer
+// ❌ DELETE /customers/:id/file - remove customer file
+router.delete(
+  '/:id/file',
+  // verifyToken,
+  // checkRole(['admin', 'dispatcher']),
+  CustomerController.removeFile
+);
+
+// ❌ DELETE /customers/:id - delete customer
 router.delete(
   '/:id',
   // verifyToken,
@@ -61,6 +74,10 @@ router.delete(
 );
 
 module.exports = router;
+
+
+
+
 
 
 

@@ -38,8 +38,7 @@ const createIndexes = async () => {
     // Создаем новый текстовый индекс с нужными полями
     await Load.collection.createIndex({
       orderId: 'text',
-      tracking: 'text',
-      billOfLadingNumber: 'text'
+      tracking: 'text'
     });
     
     // Индексы для User модели

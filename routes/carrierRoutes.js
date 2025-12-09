@@ -3,8 +3,9 @@ const router = express.Router();
 const CarrierController = require('../controllers/CarrierController');
 const { verifyToken } = require('../middlewares/authMiddleware');
 const { checkRole } = require('../middlewares/roleMiddleware');
+const { uploadEntityFile } = require('../middlewares/uploadMiddleware');
 
-// 🔍 GET /api/carriers - get all carriers
+// 🔍 GET /carriers - get all carriers
 router.get(
   '/',
   // verifyToken,
@@ -12,7 +13,7 @@ router.get(
   CarrierController.getAll
 );
 
-// 🔍 GET /api/carriers/search - search carriers
+// 🔍 GET /carriers/search - search carriers
 router.get(
   '/search',
   // verifyToken,
@@ -20,7 +21,7 @@ router.get(
   CarrierController.search
 );
 
-// 🔍 GET /api/carriers/:id - get carrier by ID
+// 🔍 GET /carriers/:id - get carrier by ID
 router.get(
   '/:id',
   // verifyToken,
@@ -28,7 +29,7 @@ router.get(
   CarrierController.getById
 );
 
-// 🔍 GET /api/carriers/:id/loads - get all loads for carrier
+// 🔍 GET /carriers/:id/loads - get all loads for carrier
 router.get(
   '/:id/loads',
   // verifyToken,
@@ -36,23 +37,35 @@ router.get(
   CarrierController.getCarrierLoads
 );
 
-// ➕ POST /api/carriers - create carrier
+// ➕ POST /carriers - create carrier
+// Supports: file (PDF)
 router.post(
   '/',
   // verifyToken,
   // checkRole(['admin', 'dispatcher']),
+  uploadEntityFile('carriers'),
   CarrierController.create
 );
 
-// ✏️ PUT /api/carriers/:id - update carrier
+// ✏️ PUT /carriers/:id - update carrier
+// Supports: file (PDF)
 router.put(
   '/:id',
   // verifyToken,
   // checkRole(['admin', 'dispatcher']),
+  uploadEntityFile('carriers'),
   CarrierController.update
 );
 
-// ❌ DELETE /api/carriers/:id - delete carrier
+// ❌ DELETE /carriers/:id/file - remove carrier file
+router.delete(
+  '/:id/file',
+  // verifyToken,
+  // checkRole(['admin', 'dispatcher']),
+  CarrierController.removeFile
+);
+
+// ❌ DELETE /carriers/:id - delete carrier
 router.delete(
   '/:id',
   // verifyToken,
@@ -61,6 +74,10 @@ router.delete(
 );
 
 module.exports = router;
+
+
+
+
 
 
 

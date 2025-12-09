@@ -173,12 +173,12 @@
 
 ### Базовый URL
 ```
-/api/loads
+/loads
 ```
 
 ### 1. Создание Load (POST)
 
-**Endpoint:** `POST /api/loads`
+**Endpoint:** `POST /loads`
 
 **Content-Type:** `multipart/form-data` (для загрузки файлов)
 
@@ -413,7 +413,7 @@ for (let file of fileInput.files) {
 }
 
 // Отправка запроса
-fetch('/api/loads', {
+fetch('/loads', {
   method: 'POST',
   headers: {
     'Authorization': `Bearer ${token}`  // Если используется авторизация
@@ -502,7 +502,7 @@ fetch('/api/loads', {
 
 ### 2. Получение всех Loads (GET)
 
-**Endpoint:** `GET /api/loads`
+**Endpoint:** `GET /loads`
 
 **Query параметры:**
 - `page` (default: 1) - номер страницы
@@ -517,7 +517,7 @@ fetch('/api/loads', {
 **Пример запроса:**
 
 ```javascript
-fetch('/api/loads?page=1&limit=20&status=Listed&sortBy=createdAt&sortOrder=desc')
+fetch('/loads?page=1&limit=20&status=Listed&sortBy=createdAt&sortOrder=desc')
   .then(res => res.json())
   .then(data => {
     console.log('Loads:', data.data);
@@ -559,12 +559,12 @@ fetch('/api/loads?page=1&limit=20&status=Listed&sortBy=createdAt&sortOrder=desc'
 
 ### 3. Получение Load по ID (GET)
 
-**Endpoint:** `GET /api/loads/:id`
+**Endpoint:** `GET /loads/:id`
 
 **Пример:**
 
 ```javascript
-fetch('/api/loads/507f1f77bcf86cd799439013')
+fetch('/loads/507f1f77bcf86cd799439013')
   .then(res => res.json())
   .then(data => {
     console.log('Load:', data.data);
@@ -573,8 +573,8 @@ fetch('/api/loads/507f1f77bcf86cd799439013')
 
 ### 4. Обновление Load (PUT)
 
-**Endpoint:** `PUT /api/loads/:id` (базовое обновление)
-**Endpoint:** `PUT /api/loads/:id/full` (полное обновление с файлами)
+**Endpoint:** `PUT /loads/:id` (базовое обновление)
+**Endpoint:** `PUT /loads/:id/full` (полное обновление с файлами)
 
 **Важно:** При обновлении Load с новыми данными Carrier или Customer:
 - Если передан `id` существующего Carrier/Customer - используется существующий
@@ -595,7 +595,7 @@ const updateData = {
   }
 };
 
-fetch('/api/loads/507f1f77bcf86cd799439013', {
+fetch('/loads/507f1f77bcf86cd799439013', {
   method: 'PUT',
   headers: {
     'Content-Type': 'application/json',
@@ -611,12 +611,12 @@ fetch('/api/loads/507f1f77bcf86cd799439013', {
 
 ### 5. Обновление статуса Load (PUT)
 
-**Endpoint:** `PUT /api/loads/:id/status`
+**Endpoint:** `PUT /loads/:id/status`
 
 **Пример:**
 
 ```javascript
-fetch('/api/loads/507f1f77bcf86cd799439013/status', {
+fetch('/loads/507f1f77bcf86cd799439013/status', {
   method: 'PUT',
   headers: {
     'Content-Type': 'application/json'
@@ -633,20 +633,20 @@ fetch('/api/loads/507f1f77bcf86cd799439013/status', {
 
 ### 6. Удаление Load (DELETE)
 
-**Endpoint:** `DELETE /api/loads/:id`
+**Endpoint:** `DELETE /loads/:id`
 
 ### 7. Поиск Loads (GET)
 
-**Endpoint:** `GET /api/loads/search?q=searchTerm&page=1&limit=10`
+**Endpoint:** `GET /loads/search?q=searchTerm&page=1&limit=10`
 
 ### 8. Получение Loads по статусу (GET)
 
-**Endpoint:** `GET /api/loads/status/:status`
+**Endpoint:** `GET /loads/status/:status`
 
 **Пример:**
 
 ```javascript
-fetch('/api/loads/status/Listed?page=1&limit=10')
+fetch('/loads/status/Listed?page=1&limit=10')
   .then(res => res.json())
   .then(data => {
     console.log('Listed loads:', data.data);
@@ -655,15 +655,15 @@ fetch('/api/loads/status/Listed?page=1&limit=10')
 
 ### 9. Получение Loads по Carrier (GET)
 
-**Endpoint:** `GET /api/loads/carrier/:carrierId`
+**Endpoint:** `GET /loads/carrier/:carrierId`
 
 ### 10. Получение Loads по Customer (GET)
 
-**Endpoint:** `GET /api/loads/customer/:customerId`
+**Endpoint:** `GET /loads/customer/:customerId`
 
 ### 11. История изменений Load (GET)
 
-**Endpoint:** `GET /api/loads/:id/history`
+**Endpoint:** `GET /loads/:id/history`
 
 **Ответ:**
 
@@ -710,16 +710,16 @@ fetch('/api/loads/status/Listed?page=1&limit=10')
 ### 12. Генерация PDF документов
 
 **BOL (Bill of Lading):**
-- `GET /api/loads/:id/bol`
+- `GET /loads/:id/bol`
 
 **Rate Confirmation:**
-- `GET /api/loads/:id/rate-confirmation`
+- `GET /loads/:id/rate-confirmation`
 
 **Все документы:**
-- `GET /api/loads/:id/documents`
+- `GET /loads/:id/documents`
 
 **Скачать PDF:**
-- `GET /api/loads/download/:filename`
+- `GET /loads/download/:filename`
 
 ---
 
@@ -727,12 +727,12 @@ fetch('/api/loads/status/Listed?page=1&limit=10')
 
 ### Базовый URL
 ```
-/api/carriers
+/carriers
 ```
 
 ### 1. Создание Carrier (POST)
 
-**Endpoint:** `POST /api/carriers`
+**Endpoint:** `POST /carriers`
 
 **Формат запроса:**
 
@@ -781,23 +781,23 @@ fetch('/api/loads/status/Listed?page=1&limit=10')
 
 ### 2. Получение всех Carriers (GET)
 
-**Endpoint:** `GET /api/carriers?page=1&limit=10&search=John`
+**Endpoint:** `GET /carriers?page=1&limit=10&search=John`
 
 ### 3. Получение Carrier по ID (GET)
 
-**Endpoint:** `GET /api/carriers/:id`
+**Endpoint:** `GET /carriers/:id`
 
 ### 4. Обновление Carrier (PUT)
 
-**Endpoint:** `PUT /api/carriers/:id`
+**Endpoint:** `PUT /carriers/:id`
 
 ### 5. Удаление Carrier (DELETE)
 
-**Endpoint:** `DELETE /api/carriers/:id`
+**Endpoint:** `DELETE /carriers/:id`
 
 ### 6. Получение Loads для Carrier (GET)
 
-**Endpoint:** `GET /api/carriers/:id/loads?page=1&limit=10`
+**Endpoint:** `GET /carriers/:id/loads?page=1&limit=10`
 
 **Ответ:**
 
@@ -830,7 +830,7 @@ fetch('/api/loads/status/Listed?page=1&limit=10')
 
 ### 7. Поиск Carriers (GET)
 
-**Endpoint:** `GET /api/carriers/search?q=John&page=1&limit=10`
+**Endpoint:** `GET /carriers/search?q=John&page=1&limit=10`
 
 **Поиск выполняется по полям:** name, companyName, mcNumber, dotNumber
 
@@ -840,12 +840,12 @@ fetch('/api/loads/status/Listed?page=1&limit=10')
 
 ### Базовый URL
 ```
-/api/customers
+/customers
 ```
 
 ### 1. Создание Customer (POST)
 
-**Endpoint:** `POST /api/customers`
+**Endpoint:** `POST /customers`
 
 **Формат запроса:**
 
@@ -891,27 +891,27 @@ fetch('/api/loads/status/Listed?page=1&limit=10')
 
 ### 2. Получение всех Customers (GET)
 
-**Endpoint:** `GET /api/customers?page=1&limit=10&search=ABC`
+**Endpoint:** `GET /customers?page=1&limit=10&search=ABC`
 
 ### 3. Получение Customer по ID (GET)
 
-**Endpoint:** `GET /api/customers/:id`
+**Endpoint:** `GET /customers/:id`
 
 ### 4. Обновление Customer (PUT)
 
-**Endpoint:** `PUT /api/customers/:id`
+**Endpoint:** `PUT /customers/:id`
 
 ### 5. Удаление Customer (DELETE)
 
-**Endpoint:** `DELETE /api/customers/:id`
+**Endpoint:** `DELETE /customers/:id`
 
 ### 6. Получение Loads для Customer (GET)
 
-**Endpoint:** `GET /api/customers/:id/loads?page=1&limit=10`
+**Endpoint:** `GET /customers/:id/loads?page=1&limit=10`
 
 ### 7. Поиск Customers (GET)
 
-**Endpoint:** `GET /api/customers/search?q=ABC&page=1&limit=10`
+**Endpoint:** `GET /customers/search?q=ABC&page=1&limit=10`
 
 **Поиск выполняется по полям:** companyName, customerAddress.city, customerAddress.state
 
@@ -1010,7 +1010,7 @@ const carrierName = "John Doe";
 const carrierMC = "MC123456";
 
 // Шаг 2: Поиск существующих Carriers
-const searchResults = await fetch(`/api/carriers/search?q=${carrierName}`)
+const searchResults = await fetch(`/carriers/search?q=${carrierName}`)
   .then(res => res.json());
 
 // Шаг 3: Если найден - показать пользователю для выбора
@@ -1038,7 +1038,7 @@ const loadData = {
 
 ### Поддержка файлов при создании/обновлении Load
 
-**Endpoint:** `POST /api/loads` или `PUT /api/loads/:id/full`
+**Endpoint:** `POST /loads` или `PUT /loads/:id/full`
 
 **Content-Type:** `multipart/form-data`
 
@@ -1061,7 +1061,7 @@ for (let file of fileInput.files) {
 }
 
 // Отправка
-fetch('/api/loads', {
+fetch('/loads', {
   method: 'POST',
   body: formData
 });
@@ -1179,7 +1179,7 @@ async function createLoadWithNewCarrierAndCustomer() {
   
   // Отправка
   try {
-    const response = await fetch('/api/loads', {
+    const response = await fetch('/loads', {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${localStorage.getItem('token')}`
@@ -1226,7 +1226,7 @@ async function createLoadWithExistingCarrierAndCustomer() {
   formData.append('delivery', JSON.stringify({ ... }));
   formData.append('status', 'Listed');
   
-  const response = await fetch('/api/loads', {
+  const response = await fetch('/loads', {
     method: 'POST',
     body: formData
   });
@@ -1243,7 +1243,7 @@ async function searchAndSelectCarrier() {
   const searchTerm = document.querySelector('#carrierSearch').value;
   
   // Поиск Carriers
-  const searchResponse = await fetch(`/api/carriers/search?q=${searchTerm}`);
+  const searchResponse = await fetch(`/carriers/search?q=${searchTerm}`);
   const searchResult = await searchResponse.json();
   
   if (searchResult.data.length > 0) {

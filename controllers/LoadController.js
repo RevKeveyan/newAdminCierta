@@ -3,8 +3,11 @@ const Load = require('../models/Load');
 const Customer = require('../models/Customer');
 const Carrier = require('../models/Carrier');
 const LoadHistory = require('../models/subModels/LoadHistory');
+const PaymentReceivable = require('../models/subModels/PaymentReceivable');
+const PaymentPayable = require('../models/subModels/PaymentPayable');
 const LoadDTO = require('../DTO/load.dto');
 const pdfService = require('../services/pdfService');
+const notificationService = require('../services/notificationService');
 const mongoose = require('mongoose');
 const fs = require('fs');
 const path = require('path');
@@ -14,7 +17,7 @@ class LoadController extends UniversalBaseController {
     super(Load, {
       historyModel: LoadHistory,
       dto: LoadDTO.LoadDTO,
-      populateFields: ['createdBy', 'carrier', 'customer'],
+      populateFields: ['createdBy', 'carrier', 'customer', 'paymentReceivable', 'paymentPayable'],
       searchFields: ['orderId', 'status', 'tracking'],
       validationRules: {
         create: {
@@ -193,16 +196,20 @@ class LoadController extends UniversalBaseController {
     // Ищем существующего carrier по уникальным идентификаторам
     let carrier = null;
     
-    // Приоритет поиска: mcNumber > dotNumber > (name + companyName)
-    if (carrierData.mcNumber) {
-      carrier = await Carrier.findOne({ mcNumber: carrierData.mcNumber });
+    // Приоритет поиска: email > mcNumber > dotNumber > (name + companyName)
+    if (carrierData.email && carrierData.email.trim() !== '') {
+      carrier = await Carrier.findOne({ email: carrierData.email.trim().toLowerCase() });
     }
     
-    if (!carrier && carrierData.dotNumber) {
-      carrier = await Carrier.findOne({ dotNumber: carrierData.dotNumber });
+    if (!carrier && carrierData.mcNumber && carrierData.mcNumber.trim() !== '') {
+      carrier = await Carrier.findOne({ mcNumber: carrierData.mcNumber.trim() });
     }
     
-    // Если не нашли по mcNumber и dotNumber, ищем по комбинации name и companyName
+    if (!carrier && carrierData.dotNumber && carrierData.dotNumber.trim() !== '') {
+      carrier = await Carrier.findOne({ dotNumber: carrierData.dotNumber.trim() });
+    }
+    
+    // Если не нашли по уникальным полям, ищем по комбинации name и companyName
     if (!carrier && carrierData.name && carrierData.companyName) {
       carrier = await Carrier.findOne({
         name: { $regex: new RegExp(`^${carrierData.name}$`, 'i') },
@@ -228,13 +235,53 @@ class LoadController extends UniversalBaseController {
         return null;
       }
       
+      // Проверяем уникальность email, mcNumber, и dotNumber перед созданием
+      const emailToCheck = carrierData.email && carrierData.email.trim() !== '' ? carrierData.email.trim().toLowerCase() : null;
+      const mcNumberToCheck = carrierData.mcNumber && carrierData.mcNumber.trim() !== '' ? carrierData.mcNumber.trim() : null;
+      const dotNumberToCheck = carrierData.dotNumber && carrierData.dotNumber.trim() !== '' ? carrierData.dotNumber.trim() : null;
+      
+      // Проверяем на дубликаты
+      const duplicateChecks = [];
+      if (emailToCheck) {
+        duplicateChecks.push(Carrier.findOne({ email: emailToCheck }).select('_id name email'));
+      }
+      if (mcNumberToCheck) {
+        duplicateChecks.push(Carrier.findOne({ mcNumber: mcNumberToCheck }).select('_id name mcNumber'));
+      }
+      if (dotNumberToCheck) {
+        duplicateChecks.push(Carrier.findOne({ dotNumber: dotNumberToCheck }).select('_id name dotNumber'));
+      }
+      
+      if (duplicateChecks.length > 0) {
+        const duplicates = await Promise.all(duplicateChecks);
+        const duplicate = duplicates.find(d => d !== null);
+        
+        if (duplicate) {
+          // Найден дубликат - выбрасываем ошибку
+          let duplicateField = '';
+          let duplicateValue = '';
+          if (duplicate.email === emailToCheck) {
+            duplicateField = 'email';
+            duplicateValue = emailToCheck;
+          } else if (duplicate.mcNumber === mcNumberToCheck) {
+            duplicateField = 'MC Number';
+            duplicateValue = mcNumberToCheck;
+          } else if (duplicate.dotNumber === dotNumberToCheck) {
+            duplicateField = 'DOT Number';
+            duplicateValue = dotNumberToCheck;
+          }
+          
+          throw new Error(`Carrier with ${duplicateField} "${duplicateValue}" already exists (Carrier: ${duplicate.name || 'Unknown'})`);
+        }
+      }
+      
       carrier = new Carrier({
         name: hasName ? carrierData.name.trim() : (hasCompanyName ? carrierData.companyName.trim() : ''),
         phoneNumber: carrierData.phoneNumber && carrierData.phoneNumber.trim() !== '' ? carrierData.phoneNumber.trim() : undefined,
-        email: carrierData.email && carrierData.email.trim() !== '' ? carrierData.email.trim().toLowerCase() : undefined,
+        email: emailToCheck,
         companyName: hasCompanyName ? carrierData.companyName.trim() : undefined,
-        mcNumber: carrierData.mcNumber && carrierData.mcNumber.trim() !== '' ? carrierData.mcNumber.trim() : undefined,
-        dotNumber: carrierData.dotNumber && carrierData.dotNumber.trim() !== '' ? carrierData.dotNumber.trim() : undefined,
+        mcNumber: mcNumberToCheck,
+        dotNumber: dotNumberToCheck,
         address: carrierData.address || {},
         emails: carrierData.emails || [],
         photos: carrierData.photos || [],
@@ -243,7 +290,17 @@ class LoadController extends UniversalBaseController {
         capabilities: Array.isArray(carrierData.capabilities) ? carrierData.capabilities.filter(c => c && c.trim() !== '') : [],
         certifications: Array.isArray(carrierData.certifications) ? carrierData.certifications.filter(c => c && c.trim() !== '') : []
       });
-      await carrier.save();
+      
+      try {
+        await carrier.save();
+      } catch (saveError) {
+        // Обрабатываем ошибки уникальности от MongoDB
+        if (saveError.code === 11000) {
+          const duplicateField = Object.keys(saveError.keyPattern)[0];
+          throw new Error(`Carrier with ${duplicateField} "${carrierData[duplicateField]}" already exists`);
+        }
+        throw saveError;
+      }
     } else {
       // Обновляем существующего carrier, если пришли новые данные
       let updated = false;
@@ -255,21 +312,61 @@ class LoadController extends UniversalBaseController {
         carrier.phoneNumber = carrierData.phoneNumber;
         updated = true;
       }
-      if (carrierData.email) {
-        carrier.email = carrierData.email;
-        updated = true;
+      
+      // Проверяем уникальность email перед обновлением
+      if (carrierData.email && carrierData.email.trim() !== '') {
+        const newEmail = carrierData.email.trim().toLowerCase();
+        if (newEmail !== carrier.email) {
+          // Проверяем, не используется ли этот email другим carrier
+          const existingCarrierWithEmail = await Carrier.findOne({ 
+            email: newEmail,
+            _id: { $ne: carrier._id }
+          });
+          if (existingCarrierWithEmail) {
+            throw new Error(`Carrier with email "${newEmail}" already exists (Carrier: ${existingCarrierWithEmail.name || 'Unknown'})`);
+          }
+          carrier.email = newEmail;
+          updated = true;
+        }
       }
+      
       if (carrierData.companyName) {
         carrier.companyName = carrierData.companyName;
         updated = true;
       }
-      if (carrierData.mcNumber && !carrier.mcNumber) {
-        carrier.mcNumber = carrierData.mcNumber;
-        updated = true;
+      
+      // Проверяем уникальность mcNumber перед обновлением
+      if (carrierData.mcNumber && carrierData.mcNumber.trim() !== '') {
+        const newMcNumber = carrierData.mcNumber.trim();
+        if (newMcNumber !== carrier.mcNumber) {
+          // Проверяем, не используется ли этот mcNumber другим carrier
+          const existingCarrierWithMc = await Carrier.findOne({ 
+            mcNumber: newMcNumber,
+            _id: { $ne: carrier._id }
+          });
+          if (existingCarrierWithMc) {
+            throw new Error(`Carrier with MC Number "${newMcNumber}" already exists (Carrier: ${existingCarrierWithMc.name || 'Unknown'})`);
+          }
+          carrier.mcNumber = newMcNumber;
+          updated = true;
+        }
       }
-      if (carrierData.dotNumber && !carrier.dotNumber) {
-        carrier.dotNumber = carrierData.dotNumber;
-        updated = true;
+      
+      // Проверяем уникальность dotNumber перед обновлением
+      if (carrierData.dotNumber && carrierData.dotNumber.trim() !== '') {
+        const newDotNumber = carrierData.dotNumber.trim();
+        if (newDotNumber !== carrier.dotNumber) {
+          // Проверяем, не используется ли этот dotNumber другим carrier
+          const existingCarrierWithDot = await Carrier.findOne({ 
+            dotNumber: newDotNumber,
+            _id: { $ne: carrier._id }
+          });
+          if (existingCarrierWithDot) {
+            throw new Error(`Carrier with DOT Number "${newDotNumber}" already exists (Carrier: ${existingCarrierWithDot.name || 'Unknown'})`);
+          }
+          carrier.dotNumber = newDotNumber;
+          updated = true;
+        }
       }
       if (carrierData.address) {
         carrier.address = carrierData.address;
@@ -307,11 +404,127 @@ class LoadController extends UniversalBaseController {
         }
       }
       if (updated) {
-        await carrier.save();
+        try {
+          await carrier.save();
+        } catch (saveError) {
+          // Обрабатываем ошибки уникальности от MongoDB
+          if (saveError.code === 11000) {
+            const duplicateField = Object.keys(saveError.keyPattern)[0];
+            throw new Error(`Carrier with ${duplicateField} "${carrierData[duplicateField]}" already exists`);
+          }
+          throw saveError;
+        }
       }
     }
 
     return carrier._id;
+  }
+
+  /**
+   * Создает платежные записи (PaymentReceivable и PaymentPayable) при переходе в статус "Delivered"
+   * Также сохраняет ссылки на созданные payments в Load
+   * @param {Object} load - документ Load
+   * @param {String} userId - ID пользователя, который создает записи
+   */
+  async createPaymentsOnDelivered(load, userId) {
+    try {
+      let receivable = null;
+      let payable = null;
+      let receivableIsNew = false;
+      let payableIsNew = false;
+
+      // Создаем PaymentReceivable (от customer), если есть customer
+      if (load.customer) {
+        // Проверяем, не создан ли уже PaymentReceivable для этого load
+        const existingReceivable = await PaymentReceivable.findOne({ loadId: load._id });
+        
+        if (!existingReceivable) {
+          const receivableData = {
+            loadId: load._id,
+            customer: load.customer,
+            daysToPay: 30, // Default 30 days
+            invoiceStatus: 'pending'
+          };
+
+          receivable = await PaymentReceivable.create(receivableData);
+          receivableIsNew = true;
+          console.log(`[LoadController] Created PaymentReceivable ${receivable._id} for load ${load.orderId}`);
+        } else {
+          receivable = existingReceivable;
+        }
+      }
+
+      // Создаем PaymentPayable (для carrier), если есть carrier
+      if (load.carrier) {
+        // Проверяем, не создан ли уже PaymentPayable для этого load
+        const existingPayable = await PaymentPayable.findOne({ loadId: load._id });
+        
+        if (!existingPayable) {
+          // Получаем данные carrier для банковских реквизитов
+          const carrier = await Carrier.findById(load.carrier);
+          
+          const payableData = {
+            loadId: load._id,
+            carrier: load.carrier
+          };
+
+          // Копируем банковские реквизиты из carrier
+          if (carrier) {
+            payableData.bank = carrier.bankAccount || null;
+            payableData.routing = carrier.routing || null;
+            payableData.accountNumber = carrier.accountNumber || null;
+          }
+
+          payable = await PaymentPayable.create(payableData);
+          payableIsNew = true;
+          console.log(`[LoadController] Created PaymentPayable ${payable._id} for load ${load.orderId}`);
+        } else {
+          payable = existingPayable;
+        }
+      }
+
+      // Обновляем Load с ссылками на созданные payments
+      const updateData = {};
+      if (receivable) {
+        updateData.paymentReceivable = receivable._id;
+      }
+      if (payable) {
+        updateData.paymentPayable = payable._id;
+      }
+
+      if (Object.keys(updateData).length > 0) {
+        await Load.findByIdAndUpdate(load._id, updateData);
+        console.log(`[LoadController] Updated Load ${load.orderId} with payment references`);
+      }
+
+      // === ОТПРАВКА УВЕДОМЛЕНИЙ ===
+      
+      // 1. Уведомление о доставке Load (с информацией о платежах)
+      notificationService.sendLoadDelivered(load, receivable, payable, userId)
+        .catch(error => {
+          console.error('[LoadController] Failed to send load delivered notification:', error);
+        });
+
+      // 2. Уведомление о создании PaymentReceivable (если новый)
+      if (receivable && receivableIsNew) {
+        notificationService.sendPaymentReceivableCreated(receivable, load)
+          .catch(error => {
+            console.error('[LoadController] Failed to send payment receivable created notification:', error);
+          });
+      }
+
+      // 3. Уведомление о создании PaymentPayable (если новый)
+      if (payable && payableIsNew) {
+        notificationService.sendPaymentPayableCreated(payable, load)
+          .catch(error => {
+            console.error('[LoadController] Failed to send payment payable created notification:', error);
+          });
+      }
+
+    } catch (error) {
+      // Логируем ошибку, но не прерываем основной процесс
+      console.error(`[LoadController] Error creating payment records for load ${load._id}:`, error);
+    }
   }
 
   // Оптимизированная генерация orderId
@@ -338,57 +551,6 @@ class LoadController extends UniversalBaseController {
     return `${Date.now()}${Math.floor(Math.random() * 10000)}`;
   };
 
-  // Оптимизированная генерация уникального номера Bill of Lading (формат: CC-XXXX)
-  generateBillOfLadingNumber = async () => {
-    const prefix = 'CC-';
-    
-    // Находим последний BOL номер (используем lean() для быстрого запроса)
-    const lastLoad = await this.model
-      .findOne({ billOfLadingNumber: { $regex: `^${prefix}` } })
-      .sort({ billOfLadingNumber: -1 })
-      .select('billOfLadingNumber')
-      .lean(); // lean() делает запрос быстрее, возвращая простой JS объект
-    
-    let nextNumber;
-    
-    if (lastLoad && lastLoad.billOfLadingNumber) {
-      // Извлекаем число из последнего BOL номера (например, CC-3387 -> 3387)
-      const lastNumber = parseInt(lastLoad.billOfLadingNumber.replace(prefix, ''), 10);
-      if (!isNaN(lastNumber)) {
-        nextNumber = lastNumber + 1;
-      } else {
-        nextNumber = 1;
-      }
-    } else {
-      // Если нет существующих номеров, начинаем с 1
-      nextNumber = 1;
-    }
-    
-    // Форматируем номер с ведущими нулями (минимум 4 цифры)
-    const formattedNumber = nextNumber.toString().padStart(4, '0');
-    let billOfLadingNumber = `${prefix}${formattedNumber}`;
-    
-    // Проверяем уникальность и инкрементируем если нужно (максимум 10 попыток)
-    let attempts = 0;
-    const maxAttempts = 10;
-    
-    while (attempts < maxAttempts) {
-      const existing = await this.model.findOne({ billOfLadingNumber }).select('_id').lean();
-      if (!existing) {
-        return billOfLadingNumber;
-      }
-      
-      // Если номер существует, увеличиваем и пробуем снова
-      nextNumber++;
-      const formattedNumber = nextNumber.toString().padStart(4, '0');
-      billOfLadingNumber = `${prefix}${formattedNumber}`;
-      attempts++;
-    }
-    
-    // Fallback: используем timestamp если не удалось сгенерировать уникальный номер
-    const timestamp = Date.now().toString().slice(-4);
-    return `${prefix}${timestamp}`;
-  };
 
   // Специфичные методы для Load
   getByStatus = async (req, res) => {
@@ -512,51 +674,92 @@ class LoadController extends UniversalBaseController {
     return value;
   }
 
-  // Вспомогательная функция для фильтрации null значений из объекта
+  // Вспомогательная функция для фильтрации null и пустых значений из объекта
   filterNullValues(obj) {
     if (!obj || typeof obj !== 'object') return obj;
     
+    // Проверяем, является ли объект ObjectId (MongoDB ObjectId)
+    // ObjectId имеет свойство _bsontype или является экземпляром mongoose.Types.ObjectId
+    if (obj._bsontype === 'ObjectID' || (mongoose.Types.ObjectId && obj instanceof mongoose.Types.ObjectId)) {
+      return obj; // Возвращаем ObjectId как есть
+    }
+    
     if (Array.isArray(obj)) {
-      return obj.map(item => {
+      const filtered = obj.map(item => {
+        // Проверяем ObjectId в массиве
+        if (item && typeof item === 'object' && (item._bsontype === 'ObjectID' || (mongoose.Types.ObjectId && item instanceof mongoose.Types.ObjectId))) {
+          return item;
+        }
+        
         // Если элемент - объект, фильтруем его поля
         if (typeof item === 'object' && item !== null && !Array.isArray(item)) {
           const filteredItem = {};
           for (const key in item) {
             const val = item[key];
             if (val !== null && val !== undefined && val !== '') {
-              filteredItem[key] = val;
+              // Проверяем ObjectId
+              if (val && typeof val === 'object' && (val._bsontype === 'ObjectID' || (mongoose.Types.ObjectId && val instanceof mongoose.Types.ObjectId))) {
+                filteredItem[key] = val;
+              } else if (typeof val === 'object' && !Array.isArray(val)) {
+                // Рекурсивно фильтруем вложенные объекты и массивы
+                const filteredVal = this.filterNullValues(val);
+                if (Object.keys(filteredVal).length > 0) {
+                  filteredItem[key] = filteredVal;
+                }
+              } else if (Array.isArray(val)) {
+                const filteredArr = this.filterNullValues(val);
+                if (filteredArr.length > 0) {
+                  filteredItem[key] = filteredArr;
+                }
+              } else {
+                filteredItem[key] = val;
+              }
             }
           }
           return filteredItem;
         }
-        return item;
+        // Для примитивных значений фильтруем null/undefined/пустые строки
+        return item !== null && item !== undefined && item !== '' ? item : null;
       }).filter(item => {
-        // Оставляем элемент только если у него есть хотя бы одно не-null значение
-        if (typeof item === 'object' && item !== null && !Array.isArray(item)) {
+        // Удаляем null элементы и пустые объекты
+        if (item === null || item === undefined) return false;
+        if (typeof item === 'object' && !Array.isArray(item)) {
+          // Не удаляем ObjectId
+          if (item._bsontype === 'ObjectID' || (mongoose.Types.ObjectId && item instanceof mongoose.Types.ObjectId)) {
+            return true;
+          }
           return Object.keys(item).length > 0;
         }
-        return item !== null && item !== undefined && item !== '';
+        return item !== '';
       });
+      return filtered;
     }
     
     const filtered = {};
     for (const key in obj) {
       const value = obj[key];
-      if (value !== null && value !== undefined && value !== '') {
-        if (typeof value === 'object' && !Array.isArray(value)) {
-          const filteredObj = this.filterNullValues(value);
-          // Оставляем объект только если в нем есть хотя бы одно не-null значение
-          if (Object.keys(filteredObj).length > 0) {
-            filtered[key] = filteredObj;
-          }
-        } else if (Array.isArray(value)) {
-          const filteredArray = this.filterNullValues(value);
-          if (filteredArray.length > 0) {
-            filtered[key] = filteredArray;
-          }
-        } else {
-          filtered[key] = value;
+      // Пропускаем null, undefined и пустые строки
+      if (value === null || value === undefined || value === '') {
+        continue;
+      }
+      
+      // Проверяем ObjectId
+      if (value && typeof value === 'object' && (value._bsontype === 'ObjectID' || (mongoose.Types.ObjectId && value instanceof mongoose.Types.ObjectId))) {
+        filtered[key] = value; // Сохраняем ObjectId как есть
+      } else if (typeof value === 'object' && !Array.isArray(value)) {
+        const filteredObj = this.filterNullValues(value);
+        // Оставляем объект только если в нем есть хотя бы одно не-null значение
+        if (Object.keys(filteredObj).length > 0) {
+          filtered[key] = filteredObj;
         }
+      } else if (Array.isArray(value)) {
+        const filteredArray = this.filterNullValues(value);
+        // Удаляем пустые массивы
+        if (filteredArray.length > 0) {
+          filtered[key] = filteredArray;
+        }
+      } else {
+        filtered[key] = value;
       }
     }
     return filtered;
@@ -650,27 +853,24 @@ class LoadController extends UniversalBaseController {
         }
       }
 
-      // Параллельная обработка Customer, Carrier, orderId и billOfLadingNumber
+      // Параллельная обработка Customer, Carrier и orderId
       // Проверяем orderId: если пустая строка или не передан, генерируем новый
       const orderIdToUse = (loadData.orderId && loadData.orderId.trim() !== '') 
         ? loadData.orderId.trim() 
         : null;
       
-      const [customerIdResult, carrierIdResult, orderIdResult, billOfLadingNumberResult] = await Promise.all([
+      const [customerIdResult, carrierIdResult, orderIdResult] = await Promise.all([
         // Обработка Customer
         customerData ? this.findOrCreateCustomer(customerData) : Promise.resolve(null),
         // Обработка Carrier
         carrierData ? this.findOrCreateCarrier(carrierData) : Promise.resolve(null),
         // Генерация orderId, если не передан или пустая строка (оптимизированная версия)
-        orderIdToUse ? Promise.resolve(orderIdToUse) : this.generateOrderId(),
-        // Генерация Bill of Lading Number
-        this.generateBillOfLadingNumber()
+        orderIdToUse ? Promise.resolve(orderIdToUse) : this.generateOrderId()
       ]);
 
       const customerId = customerIdResult;
       const carrierId = carrierIdResult;
       const orderId = orderIdResult;
-      const billOfLadingNumber = billOfLadingNumberResult;
 
       // Обработка customerEmails и carrierEmails (могут быть строками или массивами)
       let customerEmails = loadData.customerEmails;
@@ -710,24 +910,28 @@ class LoadController extends UniversalBaseController {
       const filteredInsurance = this.filterNullValues(insuranceData);
       const filteredDates = this.filterNullValues(datesData);
 
-      // Подготовка данных для Load
+      // Подготовка данных для Load (только поля с значениями)
       const loadDocument = {
         orderId,
-        customer: customerId,
-        customerEmails: customerEmails,
-        customerRate: loadData.customerRate && loadData.customerRate.trim() !== '' ? loadData.customerRate.trim() : undefined,
-        carrierRate: loadData.carrierRate && loadData.carrierRate.trim() !== '' ? loadData.carrierRate.trim() : undefined,
+        ...(customerId && { customer: customerId }),
+        customerEmails: customerEmails.length > 0 ? customerEmails : undefined,
+        ...(loadData.customerRate && loadData.customerRate.trim() !== '' && { customerRate: loadData.customerRate.trim() }),
+        ...(loadData.carrierRate && loadData.carrierRate.trim() !== '' && { carrierRate: loadData.carrierRate.trim() }),
         type: typeData,
-        pickup: Object.keys(filteredPickup).length > 0 ? filteredPickup : undefined,
-        delivery: Object.keys(filteredDelivery).length > 0 ? filteredDelivery : undefined,
-        carrier: carrierId,
-        carrierEmails: carrierEmails,
-        carrierPhotos: Array.isArray(loadData.carrierPhotos) ? loadData.carrierPhotos.filter(photo => photo && photo.trim() !== '') : [],
-        insurance: Object.keys(filteredInsurance).length > 0 ? filteredInsurance : undefined,
+        ...(Object.keys(filteredPickup).length > 0 && { pickup: filteredPickup }),
+        ...(Object.keys(filteredDelivery).length > 0 && { delivery: filteredDelivery }),
+        ...(carrierId && { carrier: carrierId }),
+        carrierEmails: carrierEmails.length > 0 ? carrierEmails : undefined,
+        carrierPhotos: Array.isArray(loadData.carrierPhotos) && loadData.carrierPhotos.filter(photo => photo && photo.trim() !== '').length > 0 
+          ? loadData.carrierPhotos.filter(photo => photo && photo.trim() !== '') 
+          : undefined,
+        ...(Object.keys(filteredInsurance).length > 0 && { insurance: filteredInsurance }),
         status: loadData.status || 'Listed',
-        dates: Object.keys(filteredDates).length > 0 ? filteredDates : undefined,
-        tracking: loadData.tracking && loadData.tracking.trim() !== '' ? loadData.tracking.trim() : undefined,
-        documents: Array.isArray(loadData.documents) ? loadData.documents.filter(doc => doc && doc.trim() !== '') : [],
+        ...(Object.keys(filteredDates).length > 0 && { dates: filteredDates }),
+        ...(loadData.tracking && loadData.tracking.trim() !== '' && { tracking: loadData.tracking.trim() }),
+        documents: Array.isArray(loadData.documents) && loadData.documents.filter(doc => doc && doc.trim() !== '').length > 0
+          ? loadData.documents.filter(doc => doc && doc.trim() !== '')
+          : undefined,
         createdBy: createdBy
       };
 
@@ -747,9 +951,6 @@ class LoadController extends UniversalBaseController {
         loadDocument.freight = freightData;
       }
 
-      // billOfLadingNumber уже получен из Promise.all выше
-      loadDocument.billOfLadingNumber = billOfLadingNumber;
-
       // Обработка загруженных файлов
       if (req.uploadedFiles && req.uploadedFiles.length > 0) {
         // Распределяем файлы по соответствующим полям
@@ -757,8 +958,11 @@ class LoadController extends UniversalBaseController {
         loadDocument.documents = [...(loadDocument.documents || []), ...req.uploadedFiles];
       }
 
+      // Фильтруем все null и пустые значения из loadDocument перед сохранением
+      const cleanedLoadDocument = this.filterNullValues(loadDocument);
+
       // Создание записи
-      const newDoc = new this.model(loadDocument);
+      const newDoc = new this.model(cleanedLoadDocument);
       const saved = await newDoc.save();
 
       // Параллельное обновление Customer и Carrier, добавляя ссылку на Load
@@ -805,6 +1009,12 @@ class LoadController extends UniversalBaseController {
       // Применение DTO
       const formattedDoc = this.dto ? this.dto.format(populatedLoad) : populatedLoad;
 
+      // Send notification for load creation (non-blocking)
+      notificationService.sendLoadCreated(populatedLoad, createdBy)
+        .catch(error => {
+          console.error('[LoadController] Failed to send load created notification:', error);
+        });
+
       res.status(201).json({
         success: true,
         data: formattedDoc,
@@ -812,6 +1022,264 @@ class LoadController extends UniversalBaseController {
       });
     } catch (error) {
       this.handleError(res, error, 'Failed to create load');
+    }
+  };
+
+  // Переопределяем базовый update для обработки customer/carrier объектов
+  update = async (req, res) => {
+    try {
+      const { id } = req.params;
+
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        return res.status(400).json({
+          success: false,
+          error: 'Invalid ID format'
+        });
+      }
+
+      // Получение старой записи
+      const oldDoc = await this.model.findById(id);
+      if (!oldDoc) {
+        return res.status(404).json({
+          success: false,
+          error: 'Load not found'
+        });
+      }
+
+      const loadData = req.body.load || req.body;
+
+      // Обработка customer - может быть ObjectId или объект
+      let customerId = oldDoc.customer;
+      let customerWasProvided = 'customer' in loadData;
+      
+      if (customerWasProvided) {
+        if (loadData.customer === null || loadData.customer === undefined) {
+          // Явное удаление customer
+          customerId = null;
+        }
+        // Если это ObjectId (строка или ObjectId)
+        else if (mongoose.Types.ObjectId.isValid(loadData.customer)) {
+          customerId = loadData.customer;
+        } 
+        // Если это объект, проверяем наличие id поля
+        else if (typeof loadData.customer === 'object') {
+          const customerData = this.parseJsonField(loadData.customer);
+          if (customerData) {
+            // Если объект содержит id, используем его напрямую
+            if (customerData.id && mongoose.Types.ObjectId.isValid(customerData.id)) {
+              customerId = customerData.id;
+            } else {
+              // Иначе обрабатываем через findOrCreateCustomer
+              try {
+                customerId = await this.findOrCreateCustomer(customerData);
+              } catch (error) {
+                return res.status(400).json({
+                  success: false,
+                  error: 'Failed to process customer',
+                  message: error.message
+                });
+              }
+            }
+          } else {
+            customerId = null;
+          }
+        }
+      }
+
+      // Обработка carrier - может быть ObjectId или объект
+      let carrierId = oldDoc.carrier;
+      let carrierWasProvided = 'carrier' in loadData;
+      
+      if (carrierWasProvided) {
+        if (loadData.carrier === null || loadData.carrier === undefined) {
+          // Явное удаление carrier
+          carrierId = null;
+        }
+        // Если это ObjectId (строка или ObjectId)
+        else if (mongoose.Types.ObjectId.isValid(loadData.carrier)) {
+          carrierId = loadData.carrier;
+        } 
+        // Если это объект, проверяем наличие id поля
+        else if (typeof loadData.carrier === 'object') {
+          const carrierData = this.parseJsonField(loadData.carrier);
+          if (carrierData) {
+            // Если объект содержит id, используем его напрямую
+            if (carrierData.id && mongoose.Types.ObjectId.isValid(carrierData.id)) {
+              carrierId = carrierData.id;
+            } else {
+              // Иначе обрабатываем через findOrCreateCarrier
+              try {
+                carrierId = await this.findOrCreateCarrier(carrierData);
+              } catch (error) {
+                return res.status(400).json({
+                  success: false,
+                  error: 'Failed to process carrier',
+                  message: error.message
+                });
+              }
+            }
+          } else {
+            carrierId = null;
+          }
+        }
+      }
+
+      // Подготовка данных для обновления (исключаем customer/carrier объекты сразу)
+      // Создаем новый объект без customer/carrier, чтобы избежать передачи объектов в MongoDB
+      const updateData = {};
+      Object.keys(loadData).forEach(key => {
+        // Пропускаем customer и carrier - они будут добавлены отдельно как ID
+        if (key !== 'customer' && key !== 'carrier') {
+          updateData[key] = loadData[key];
+        }
+      });
+      
+      // Добавляем customer/carrier только как ID, если они были предоставлены
+      if (customerWasProvided) {
+        updateData.customer = customerId;
+      }
+
+      if (carrierWasProvided) {
+        updateData.carrier = carrierId;
+      }
+
+      // Фильтруем только измененные поля
+      const filteredData = this.filterChangedFields(oldDoc, updateData);
+      
+      // Если нет изменений, возвращаем существующую запись
+      if (Object.keys(filteredData).length === 0) {
+        const formattedDoc = this.dto ? this.dto.format(oldDoc) : oldDoc;
+        return res.status(200).json({
+          success: true,
+          data: formattedDoc,
+          message: 'No changes detected'
+        });
+      }
+
+      // Подготовка данных (только для измененных полей)
+      const data = this.prepareUpdateData(req, filteredData);
+
+      // Защитная проверка: убеждаемся, что customer и carrier - это ObjectId, а не объекты
+      if (data.customer && typeof data.customer === 'object' && !mongoose.Types.ObjectId.isValid(data.customer)) {
+        // Если это объект без валидного ObjectId, пытаемся извлечь id
+        if (data.customer.id && mongoose.Types.ObjectId.isValid(data.customer.id)) {
+          data.customer = data.customer.id;
+        } else {
+          delete data.customer; // Удаляем если не можем преобразовать
+        }
+      }
+      
+      if (data.carrier && typeof data.carrier === 'object' && !mongoose.Types.ObjectId.isValid(data.carrier)) {
+        // Если это объект без валидного ObjectId, пытаемся извлечь id
+        if (data.carrier.id && mongoose.Types.ObjectId.isValid(data.carrier.id)) {
+          data.carrier = data.carrier.id;
+        } else {
+          delete data.carrier; // Удаляем если не можем преобразовать
+        }
+      }
+
+      // Обновление записи
+      const updated = await this.model.findByIdAndUpdate(
+        id,
+        data,
+        { new: true, runValidators: true }
+      )
+      .populate('customer')
+      .populate('carrier')
+      .populate('createdBy');
+
+      // Обновляем связи в Customer и Carrier
+      if (customerId && customerId.toString() !== oldDoc.customer?.toString()) {
+        // Удаляем старую связь
+        if (oldDoc.customer) {
+          await Customer.findByIdAndUpdate(oldDoc.customer, {
+            $pull: { loads: id }
+          });
+        }
+        // Добавляем новую связь
+        if (customerId) {
+          await Customer.findByIdAndUpdate(customerId, {
+            $addToSet: { loads: id }
+          });
+        }
+      }
+
+      if (carrierId && carrierId.toString() !== oldDoc.carrier?.toString()) {
+        // Удаляем старую связь
+        if (oldDoc.carrier) {
+          await Carrier.findByIdAndUpdate(oldDoc.carrier, {
+            $pull: { loads: id }
+          });
+        }
+        // Добавляем новую связь
+        if (carrierId) {
+          await Carrier.findByIdAndUpdate(carrierId, {
+            $addToSet: { loads: id }
+          });
+        }
+      }
+
+      // Запись в историю изменений
+      if (this.historyModel) {
+        const changes = this.getChanges(oldDoc, updateData);
+        const userId = req.user?.id;
+        if (changes.length > 0 && userId) {
+          await this.createHistoryRecord(id, 'updated', userId, changes);
+        }
+      }
+
+      // Send notifications (non-blocking) - use already populated updated document
+      // Send notification if status changed
+      if (updateData.status && updateData.status !== oldDoc.status) {
+        notificationService.sendLoadStatusUpdate(updated, oldDoc.status, updateData.status, req.user?.id)
+          .catch(error => {
+            console.error('[LoadController] Failed to send status update notification:', error);
+          });
+      }
+
+      // Send notification if carrier was assigned
+      if (carrierId && carrierId.toString() !== oldDoc.carrier?.toString()) {
+        notificationService.sendLoadAssigned(updated, carrierId, req.user?.id)
+          .catch(error => {
+            console.error('[LoadController] Failed to send load assigned notification:', error);
+          });
+      }
+
+      // Send general update notification (if something changed besides status and carrier assignment)
+      if (this.historyModel) {
+        const changes = this.getChanges(oldDoc, updateData);
+        // Only send if there are changes other than status (status notification is sent separately)
+        const nonStatusChanges = changes.filter(c => c.field !== 'status');
+        if (nonStatusChanges.length > 0) {
+          const changesObj = {};
+          nonStatusChanges.forEach(c => {
+            changesObj[c.field] = { from: c.oldValue, to: c.newValue };
+          });
+          notificationService.sendLoadUpdated(updated, changesObj, req.user?.id)
+            .catch(error => {
+              console.error('[LoadController] Failed to send load updated notification:', error);
+            });
+        }
+      }
+
+      // Создаем платежные записи при переходе в статус "Delivered"
+      if (updateData.status === 'Delivered' && oldDoc.status !== 'Delivered') {
+        this.createPaymentsOnDelivered(updated, req.user?.id)
+          .catch(error => {
+            console.error('[LoadController] Failed to create payment records:', error);
+          });
+      }
+
+      // Применение DTO
+      const formattedDoc = this.dto ? this.dto.format(updated) : updated;
+
+      res.status(200).json({
+        success: true,
+        data: formattedDoc,
+        message: 'Load updated successfully'
+      });
+    } catch (error) {
+      this.handleError(res, error, 'Failed to update load');
     }
   };
 
@@ -969,6 +1437,22 @@ class LoadController extends UniversalBaseController {
         updateData.documents = [...existingDocuments, ...req.uploadedFiles];
       }
 
+      // Фильтруем все null и пустые значения из updateData перед обновлением
+      const cleanedUpdateData = this.filterNullValues(updateData);
+
+      // Фильтруем только измененные поля (сравниваем с существующим документом)
+      const filteredData = this.filterChangedFields(oldDoc, cleanedUpdateData);
+      
+      // Если нет изменений, возвращаем существующую запись
+      if (Object.keys(filteredData).length === 0) {
+        const formattedDoc = this.dto ? this.dto.format(oldDoc) : oldDoc;
+        return res.status(200).json({
+          success: true,
+          data: formattedDoc,
+          message: 'No changes detected'
+        });
+      }
+
       // Удаляем старый BOL PDF если он существует - ВРЕМЕННО ОТКЛЮЧЕНО для тестирования интеграции с UI
       // if (oldDoc.bolPdfPath) {
       //   try {
@@ -978,41 +1462,51 @@ class LoadController extends UniversalBaseController {
       //   }
       // }
 
-      // Обновление записи
+      // Обновление записи (только измененными полями)
       const updated = await this.model.findByIdAndUpdate(
         id,
-        updateData,
+        filteredData,
         { new: true, runValidators: true }
       )
       .populate('customer')
       .populate('carrier')
       .populate('createdBy');
 
-      // Обновляем связи в Customer и Carrier
-      if (customerId && customerId.toString() !== oldDoc.customer?.toString()) {
+      // Обновляем связи в Customer и Carrier только если поле действительно изменилось
+      if (filteredData.customer !== undefined) {
+        const newCustomerId = filteredData.customer;
+        const oldCustomerId = oldDoc.customer;
+        
         // Удаляем старую связь
-        if (oldDoc.customer) {
-          await Customer.findByIdAndUpdate(oldDoc.customer, {
+        if (oldCustomerId) {
+          await Customer.findByIdAndUpdate(oldCustomerId, {
             $pull: { loads: id }
           });
         }
-        // Добавляем новую связь
-        await Customer.findByIdAndUpdate(customerId, {
-          $addToSet: { loads: id }
-        });
+        // Добавляем новую связь (если не null)
+        if (newCustomerId) {
+          await Customer.findByIdAndUpdate(newCustomerId, {
+            $addToSet: { loads: id }
+          });
+        }
       }
 
-      if (carrierId && carrierId.toString() !== oldDoc.carrier?.toString()) {
+      if (filteredData.carrier !== undefined) {
+        const newCarrierId = filteredData.carrier;
+        const oldCarrierId = oldDoc.carrier;
+        
         // Удаляем старую связь
-        if (oldDoc.carrier) {
-          await Carrier.findByIdAndUpdate(oldDoc.carrier, {
+        if (oldCarrierId) {
+          await Carrier.findByIdAndUpdate(oldCarrierId, {
             $pull: { loads: id }
           });
         }
-        // Добавляем новую связь
-        await Carrier.findByIdAndUpdate(carrierId, {
-          $addToSet: { loads: id }
-        });
+        // Добавляем новую связь (если не null)
+        if (newCarrierId) {
+          await Carrier.findByIdAndUpdate(newCarrierId, {
+            $addToSet: { loads: id }
+          });
+        }
       }
 
       // Регенерируем BOL PDF с обновленными данными - ВРЕМЕННО ОТКЛЮЧЕНО для тестирования интеграции с UI
@@ -1032,6 +1526,32 @@ class LoadController extends UniversalBaseController {
         if (changes.length > 0 && userId) {
           await this.createHistoryRecord(id, 'updated', userId, changes);
         }
+      }
+
+      // Send notification if status changed (non-blocking)
+      // Проверяем filteredData, так как это реально измененные поля
+      if (filteredData.status && filteredData.status !== oldDoc.status) {
+        notificationService.sendLoadStatusUpdate(updated, oldDoc.status, filteredData.status, req.user?.id)
+          .catch(error => {
+            console.error('[LoadController] Failed to send status update notification:', error);
+          });
+      }
+
+      // Send notification if carrier was assigned (non-blocking)
+      // Проверяем filteredData для carrier
+      if (filteredData.carrier && filteredData.carrier.toString() !== oldDoc.carrier?.toString()) {
+        notificationService.sendLoadAssigned(updated, filteredData.carrier, req.user?.id)
+          .catch(error => {
+            console.error('[LoadController] Failed to send load assigned notification:', error);
+          });
+      }
+
+      // Создаем платежные записи при переходе в статус "Delivered"
+      if (filteredData.status === 'Delivered' && oldDoc.status !== 'Delivered') {
+        this.createPaymentsOnDelivered(updated, req.user?.id)
+          .catch(error => {
+            console.error('[LoadController] Failed to create payment records:', error);
+          });
       }
 
       // Применение DTO
@@ -1075,7 +1595,10 @@ class LoadController extends UniversalBaseController {
           updatedAt: new Date()
         },
         { new: true }
-      );
+      )
+      .populate('customer')
+      .populate('carrier')
+      .populate('createdBy');
 
       // Запись в историю (сохраняем изменение статуса)
       if (this.historyModel) {
@@ -1087,6 +1610,22 @@ class LoadController extends UniversalBaseController {
             newValue: status
           }]);
         }
+      }
+
+      // Send notification for status update (non-blocking)
+      if (status !== oldDoc.status) {
+        notificationService.sendLoadStatusUpdate(updated, oldDoc.status, status, req.user?.id)
+          .catch(error => {
+            console.error('[LoadController] Failed to send status update notification:', error);
+          });
+      }
+
+      // Создаем платежные записи при переходе в статус "Delivered"
+      if (status === 'Delivered' && oldDoc.status !== 'Delivered') {
+        this.createPaymentsOnDelivered(updated, req.user?.id)
+          .catch(error => {
+            console.error('[LoadController] Failed to create payment records:', error);
+          });
       }
 
       const formattedDoc = this.dto ? this.dto.format(updated) : updated;
@@ -1288,3 +1827,4 @@ class LoadController extends UniversalBaseController {
 }
 
 module.exports = new LoadController();
+

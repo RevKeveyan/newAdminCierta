@@ -87,7 +87,7 @@ const loadSchema = new mongoose.Schema({
   // Status
   status: {
     type: String,
-    enum: ["Listed", "Dispatched", "Picked up", "Delivered", "On Hold", "Cancelled"],
+    enum: ["Listed", "Dispatched", "Picked Up", "Delivered", "On Hold", "Cancelled"],
     default: "Listed",
     required: true
   },
@@ -101,37 +101,28 @@ const loadSchema = new mongoose.Schema({
   },
 
   tracking: { type: String },
+  
+  // Files organized by type
+  images: [String],  // Array of image URLs
+  pdfs: [String],    // Array of PDF URLs
+  
+  // Legacy fields for backward compatibility
   documents: [String],
-
-  // Дополнительные поля для обратной совместимости и функциональности
-  billOfLadingNumber: { type: String, unique: true },
   bolPdfPath: String,
   rateConfirmationPdfPath: String,
 
-  carrierPaymentStatus: {
-    status: {
-      type: String,
-      enum: ["Invoiced", "Paid", "On Hold", "Withheld", "Charges applied"],
-    },
-    date: Date
+  // Ссылки на платежные записи (создаются при статусе "Delivered")
+  paymentReceivable: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'PaymentReceivable'
   },
-
-  customerPaymentStatus: {
-    status: {
-      type: String,
-      enum: ["Invoiced", "Paid", "On Hold", "Withheld", "Charges applied"],
-    },
-    date: Date
+  
+  paymentPayable: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'PaymentPayable'
   },
 
   lastEmailSent: Date,
-
-  tonuPaidToCarrier: Boolean,
-  detentionPaidToCarrier: Boolean,
-  layoverPaidToCarrier: Boolean,
-  tonuReceivedFromCustomer: Boolean,
-  detentionReceivedFromCustomer: Boolean,
-  layoverReceivedFromCustomer: Boolean,
 
   createdBy: { 
     type: mongoose.Schema.Types.ObjectId, 
@@ -149,5 +140,7 @@ loadSchema.index({ status: 1 });
 loadSchema.index({ 'dates.assignedDate': 1 });
 loadSchema.index({ 'dates.pickupDate': 1 });
 loadSchema.index({ 'dates.deliveryDate': 1 });
+loadSchema.index({ paymentReceivable: 1 });
+loadSchema.index({ paymentPayable: 1 });
 
 module.exports = mongoose.model("Load", loadSchema);

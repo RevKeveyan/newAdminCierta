@@ -8,16 +8,18 @@ const userSchema = new mongoose.Schema(
     email: { type: String, required: true, unique: true, lowercase: true },
     password: { type: String, required: true },
     profileImage: { type: String }, 
+    userFile: { type: String }, // PDF file URL
     role: {
       type: String,
       enum: [
         "admin",
-        "dispatcher",
-        "carrier",
-        "customer",
-        "accountant",
         "manager",
-        "driver",
+        "accountingManager",
+        "accountingIn",
+        "accountingOut",
+        "dispatcher",
+        "partner",
+        "BidAgent",
       ],
       required: true,
     },

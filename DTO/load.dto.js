@@ -21,7 +21,11 @@ function customerDTO(customer) {
     companyName: customer.companyName,
     customerAddress: addressDTO(customer.customerAddress),
     emails: customer.emails || [],
-    phoneNumber: customer.phoneNumber
+    phoneNumber: customer.phoneNumber,
+    // Платежная информация
+    paymentMethod: customer.paymentMethod,
+    paymentTerms: customer.paymentTerms,
+    creditLimit: customer.creditLimit
   };
 }
 
@@ -41,7 +45,11 @@ function carrierDTO(carrier) {
     equipmentType: carrier.equipmentType,
     size: carrier.size,
     capabilities: Array.isArray(carrier.capabilities) ? carrier.capabilities : [],
-    certifications: Array.isArray(carrier.certifications) ? carrier.certifications : []
+    certifications: Array.isArray(carrier.certifications) ? carrier.certifications : [],
+    // Банковские реквизиты
+    routing: carrier.routing,
+    bankAccount: carrier.bankAccount,
+    accountNumber: carrier.accountNumber
   };
 }
 
@@ -88,11 +96,37 @@ function locationDTO(location) {
   };
 }
 
-function paymentStatusDTO(paymentStatus) {
-  if (!paymentStatus) return null;
+function paymentReceivableDTO(payment) {
+  if (!payment) return null;
+  // Если это только ObjectId, возвращаем только id
+  if (typeof payment === 'string' || payment._bsontype === 'ObjectID') {
+    return { id: payment.toString() };
+  }
   return {
-    status: paymentStatus.status,
-    date: paymentStatus.date
+    id: payment._id || payment.id,
+    status: payment.status,
+    amount: payment.amount,
+    totalAmount: payment.totalAmount,
+    paidAmount: payment.paidAmount,
+    invoiceNumber: payment.invoiceNumber,
+    dueDate: payment.dueDate
+  };
+}
+
+function paymentPayableDTO(payment) {
+  if (!payment) return null;
+  // Если это только ObjectId, возвращаем только id
+  if (typeof payment === 'string' || payment._bsontype === 'ObjectID') {
+    return { id: payment.toString() };
+  }
+  return {
+    id: payment._id || payment.id,
+    status: payment.status,
+    amount: payment.amount,
+    grossAmount: payment.grossAmount,
+    netAmount: payment.netAmount,
+    paidAmount: payment.paidAmount,
+    scheduledDate: payment.scheduledDate
   };
 }
 
@@ -103,6 +137,7 @@ function toLoadDTO(load = {}) {
     customer: customerDTO(load.customer),
     customerEmails: Array.isArray(load.customerEmails) ? load.customerEmails : [],
     customerRate: load.customerRate,
+    carrierRate: load.carrierRate,
     type: load.type || { freight: false, vehicle: false },
     vehicle: vehicleDTO(load.vehicle),
     freight: freightDTO(load.freight),
@@ -117,20 +152,12 @@ function toLoadDTO(load = {}) {
     tracking: load.tracking,
     documents: Array.isArray(load.documents) ? load.documents : [],
     // Дополнительные поля
-    billOfLadingNumber: load.billOfLadingNumber,
     bolPdfPath: load.bolPdfPath,
     rateConfirmationPdfPath: load.rateConfirmationPdfPath,
-    carrierPaymentStatus: paymentStatusDTO(load.carrierPaymentStatus),
-    customerPaymentStatus: paymentStatusDTO(load.customerPaymentStatus),
+    // Ссылки на платежные записи
+    paymentReceivable: paymentReceivableDTO(load.paymentReceivable),
+    paymentPayable: paymentPayableDTO(load.paymentPayable),
     lastEmailSent: load.lastEmailSent,
-    fees: {
-      tonuPaidToCarrier: !!load.tonuPaidToCarrier,
-      detentionPaidToCarrier: !!load.detentionPaidToCarrier,
-      layoverPaidToCarrier: !!load.layoverPaidToCarrier,
-      tonuReceivedFromCustomer: !!load.tonuReceivedFromCustomer,
-      detentionReceivedFromCustomer: !!load.detentionReceivedFromCustomer,
-      layoverReceivedFromCustomer: !!load.layoverReceivedFromCustomer
-    },
     createdBy: load.createdBy,
     createdAt: load.createdAt,
     updatedAt: load.updatedAt

@@ -54,8 +54,8 @@ class PDFService {
         await this.fillBOLFields(firstPage, bolData, font, boldFont, width, height);
       }
 
-      // Generate filename using billOfLadingNumber or loadId
-      const identifier = loadData.billOfLadingNumber || loadId || loadData.vin || Date.now();
+      // Generate filename using loadId or orderId
+      const identifier = loadId || loadData.orderId || loadData.vin || Date.now();
       const filename = `BOL_${identifier}.pdf`;
       const outputPath = path.join(this.outputPath, filename);
 
@@ -305,7 +305,7 @@ class PDFService {
       billTo: 'CIERTA CORPORATION\n710 E MAIN ST\nLEXINGTON, KY 40502\nAccounting@ciertacorp.com',
       
       purchaseOrderNo: load.orderId?.toString() || '',
-      billOfLadingNo: load.billOfLadingNumber || '',
+      billOfLadingNo: load.orderId?.toString() || '',
       
       pickupDate,
       deliveryDate

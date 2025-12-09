@@ -6,7 +6,7 @@ const { verifyToken } = require('../middlewares/authMiddleware');
 const { checkRole } = require('../middlewares/roleMiddleware');
 const { uploadFiles } = require('../middlewares/uploadMiddleware'); // универсальный upload
 
-// 🔍 GET /api/loads - filtered search, sort, pagination
+// 🔍 GET /loads - filtered search, sort, pagination
 router.get(
   '/',
   // verifyToken,
@@ -14,7 +14,7 @@ router.get(
   LoadController.getAll
 );
 
-// 🔍 GET /api/loads/search - advanced search
+// 🔍 GET /loads/search - advanced search
 router.get(
   '/search',
   verifyToken,
@@ -22,7 +22,7 @@ router.get(
   LoadController.search
 );
 
-// 🔍 GET /api/loads/status/:status - get loads by status
+// 🔍 GET /loads/status/:status - get loads by status
 router.get(
   '/status/:status',
   verifyToken,
@@ -30,7 +30,7 @@ router.get(
   LoadController.getByStatus
 );
 
-// 🔍 GET /api/loads/carrier/:carrierId - get loads by carrier
+// 🔍 GET /loads/carrier/:carrierId - get loads by carrier
 router.get(
   '/carrier/:carrierId',
   verifyToken,
@@ -38,7 +38,7 @@ router.get(
   LoadController.getByCarrier
 );
 
-// 🔍 GET /api/loads/customer/:customerId - get loads by customer
+// 🔍 GET /loads/customer/:customerId - get loads by customer
 router.get(
   '/customer/:customerId',
   verifyToken,
@@ -46,7 +46,7 @@ router.get(
   LoadController.getByCustomer
 );
 
-// 🔍 GET /api/loads/:id/history - get load history
+// 🔍 GET /loads/:id/history - get load history
 router.get(
   '/:id/history',
   verifyToken,
@@ -54,7 +54,15 @@ router.get(
   LoadController.getLoadHistory
 );
 
-// ➕ POST /api/loads - create load with files (images, documents)
+// 🔍 GET /loads/:id - get load by ID
+router.get(
+  '/:id',
+  verifyToken,
+  // checkRole(['admin', 'dispatcher', 'manager']),
+  LoadController.getById
+);
+
+// ➕ POST /loads - create load with files (images, documents)
 router.post(
   '/',
   verifyToken,
@@ -63,7 +71,7 @@ router.post(
   LoadController.create
 );
 
-// ✏️ PUT /api/loads/:id - update load (basic update)
+// ✏️ PUT /loads/:id - update load (basic update)
 router.put(
   '/:id',
   verifyToken,
@@ -71,7 +79,7 @@ router.put(
   LoadController.update
 );
 
-// ✏️ PUT /api/loads/:id/full - update load with files support
+// ✏️ PUT /loads/:id/full - update load with files support
 router.put(
   '/:id/full',
   verifyToken,
@@ -80,7 +88,7 @@ router.put(
   LoadController.updateLoad
 );
 
-// ✏️ PUT /api/loads/:id/status - update load status
+// ✏️ PUT /loads/:id/status - update load status
 router.put(
   '/:id/status',
   verifyToken,
@@ -88,7 +96,7 @@ router.put(
   LoadController.updateStatus
 );
 
-// ❌ DELETE /api/loads/:id - delete load
+// ❌ DELETE /loads/:id - delete load
 router.delete(
   '/:id',
   verifyToken,
@@ -97,7 +105,7 @@ router.delete(
 );
 
 // 📄 PDF Generation Routes - ВРЕМЕННО ОТКЛЮЧЕНО для тестирования интеграции с UI
-// 🔍 GET /api/loads/:id/bol - generate BOL PDF
+// 🔍 GET /loads/:id/bol - generate BOL PDF
 // router.get(
 //   '/:id/bol',
 //   verifyToken,
@@ -105,7 +113,7 @@ router.delete(
 //   LoadController.generateBOL
 // );
 
-// 🔍 GET /api/loads/:id/rate-confirmation - generate Rate Confirmation PDF
+// 🔍 GET /loads/:id/rate-confirmation - generate Rate Confirmation PDF
 // router.get(
 //   '/:id/rate-confirmation',
 //   verifyToken,
@@ -113,7 +121,7 @@ router.delete(
 //   LoadController.generateRateConfirmation
 // );
 
-// 🔍 GET /api/loads/:id/documents - generate all documents (BOL + Rate Confirmation)
+// 🔍 GET /loads/:id/documents - generate all documents (BOL + Rate Confirmation)
 // router.get(
 //   '/:id/documents',
 //   verifyToken,
@@ -121,7 +129,7 @@ router.delete(
 //   LoadController.generateAllDocuments
 // );
 
-// 📥 GET /api/loads/download/:filename - download generated PDF
+// 📥 GET /loads/download/:filename - download generated PDF
 // router.get(
 //   '/download/:filename',
 //   verifyToken,

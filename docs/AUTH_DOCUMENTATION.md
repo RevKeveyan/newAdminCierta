@@ -5,9 +5,9 @@
 2. [Модели данных](#модели-данных)
 3. [JWT токены](#jwt-токены)
 4. [REST эндпоинты](#rest-эндпоинты)
-   - [POST /api/auth/login](#post-apiauthlogin)
-   - [POST /api/auth/forgot-password](#post-apiauthforgot-password)
-   - [POST /api/auth/reset-password](#post-apiauthreset-password)
+   - [POST /auth/login](#post-apiauthlogin)
+   - [POST /auth/forgot-password](#post-apiauthforgot-password)
+   - [POST /auth/reset-password](#post-apiauthreset-password)
 5. [Middleware слоя](#middleware-слоя)
 6. [Интеграция на фронтенде](#интеграция-на-фронтенде)
 7. [Поток восстановления пароля](#поток-восстановления-пароля)
@@ -19,7 +19,7 @@
 ## Общая схема
 
 ```
-Пользователь → (email, password) → POST /api/auth/login
+Пользователь → (email, password) → POST /auth/login
            ← { token, user } (JWT на 7 дней)
                      │
                      ▼
@@ -67,7 +67,7 @@
 
 ## REST эндпоинты
 
-### POST /api/auth/login
+### POST /auth/login
 
 - **Назначение:** Аутентификация пользователя и выдача JWT.
 - **Тело запроса:**
@@ -109,7 +109,7 @@
 
 ---
 
-### POST /api/auth/forgot-password
+### POST /auth/forgot-password
 
 - **Назначение:** Отправка 6-значного кода подтверждения на email.
 - **Тело запроса:**
@@ -135,7 +135,7 @@
 
 ---
 
-### POST /api/auth/reset-password
+### POST /auth/reset-password
 
 - **Назначение:** Подтверждение кода и установка нового пароля.
 - **Тело запроса:**
@@ -311,5 +311,9 @@ async function login(email, password) {
 - Модели: `models/User.js`, `models/ResetCode.js`
 
 Эта документация охватывает весь текущий функционал авторизации и восстановления пароля. При добавлении новых ролей, чекпоинтов MFA или refresh-токенов обновляйте соответствующие секции.
+
+
+
+
 
 
