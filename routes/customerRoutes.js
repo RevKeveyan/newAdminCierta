@@ -3,7 +3,7 @@ const router = express.Router();
 const CustomerController = require('../controllers/CustomerController');
 const { verifyToken } = require('../middlewares/authMiddleware');
 const { checkRole } = require('../middlewares/roleMiddleware');
-const { uploadEntityFile } = require('../middlewares/uploadMiddleware');
+const { uploadSeparateFiles } = require('../middlewares/uploadMiddleware');
 
 // 🔍 GET /customers - get all customers
 router.get(
@@ -19,6 +19,14 @@ router.get(
   // verifyToken,
   // checkRole(['admin', 'dispatcher', 'manager']),
   CustomerController.search
+);
+
+// 🔍 GET /customers/:id/allowedUsers - get users for THIS specific customer
+router.get(
+  '/:id/allowedUsers',
+  // verifyToken,
+  // checkRole(['admin', 'dispatcher', 'manager']),
+  CustomerController.getAllowedUsers
 );
 
 // 🔍 GET /customers/:id - get customer by ID
@@ -38,22 +46,22 @@ router.get(
 );
 
 // ➕ POST /customers - create customer
-// Supports: file (PDF)
+// Supports: pdfs (multiple PDFs)
 router.post(
   '/',
   // verifyToken,
   // checkRole(['admin', 'dispatcher']),
-  uploadEntityFile('customers'),
+  uploadSeparateFiles('customers', { allowImages: true, allowPDFs: true }),
   CustomerController.create
 );
 
 // ✏️ PUT /customers/:id - update customer
-// Supports: file (PDF)
+// Supports: pdfs (multiple PDFs)
 router.put(
   '/:id',
   // verifyToken,
   // checkRole(['admin', 'dispatcher']),
-  uploadEntityFile('customers'),
+  uploadSeparateFiles('customers', { allowImages: true, allowPDFs: true }),
   CustomerController.update
 );
 

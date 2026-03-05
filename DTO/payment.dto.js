@@ -10,7 +10,7 @@ module.exports = paymentStatusDTO;
 function toLoadPaymentDTO(lp = {}) {
   return {
     id: lp._id,
-    loadId: lp.loadId,
+    load: lp.load,
     paidBy: lp.paidBy,
     amount: lp.amount,
     date: lp.date,

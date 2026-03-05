@@ -8,6 +8,34 @@ const createIndexes = async () => {
     // Индексы для Load модели
     const Load = mongoose.model('Load');
     
+    // Удаляем старый индекс loadId_1, если он существует (legacy)
+    try {
+      const loadIndexes = await Load.collection.indexes();
+      const loadIdIndex = loadIndexes.find(idx => idx.key && idx.key.loadId);
+      if (loadIdIndex) {
+        console.log(`⚠️  Found legacy loadId index: ${loadIdIndex.name}, dropping...`);
+        await Load.collection.dropIndex(loadIdIndex.name);
+        console.log(`✅ Dropped legacy loadId index: ${loadIdIndex.name}`);
+      }
+    } catch (error) {
+      if (error.code !== 27) { // 27 = IndexNotFound
+        console.warn('Warning while checking/dropping loadId index:', error.message);
+      }
+    }
+    
+    // Убеждаемся, что уникальный индекс на orderId существует
+    // Mongoose создает его автоматически из схемы, но явно создаем для надежности
+    try {
+      await Load.collection.createIndex({ orderId: 1 }, { unique: true });
+      console.log('✅ Unique index on orderId created/verified');
+    } catch (error) {
+      if (error.code === 85) { // IndexOptionsConflict - индекс уже существует
+        console.log('✅ Unique index on orderId already exists');
+      } else {
+        console.warn('Warning while creating orderId unique index:', error.message);
+      }
+    }
+    
     // Составные индексы для частых запросов
     await Load.collection.createIndex({ status: 1, createdAt: -1 });
     await Load.collection.createIndex({ createdBy: 1, createdAt: -1 });
@@ -43,7 +71,20 @@ const createIndexes = async () => {
     
     // Индексы для User модели
     const User = mongoose.model('User');
-    await User.collection.createIndex({ email: 1 }, { unique: true });
+    try {
+      await User.collection.createIndex({ email: 1 }, { unique: true });
+    } catch (error) {
+      if (error.code !== 85 && error.code !== 86) { // IndexOptionsConflict или IndexKeySpecsConflict
+        console.warn('Warning while creating User email index:', error.message);
+      }
+    }
+    try {
+      await User.collection.createIndex({ companyName: 1 }, { sparse: true });
+    } catch (error) {
+      if (error.code !== 85 && error.code !== 86) {
+        console.warn('Warning while creating User companyName index:', error.message);
+      }
+    }
     await User.collection.createIndex({ role: 1, status: 1 });
     await User.collection.createIndex({ 
       firstName: 'text', 
@@ -52,23 +93,103 @@ const createIndexes = async () => {
       companyName: 'text'
     });
     
+    const Customer = mongoose.model('Customer');
+    try {
+      const customerIndexes = await Customer.collection.indexes();
+      const companyNameIndex = customerIndexes.find(idx => idx.key && idx.key.companyName && idx.unique);
+      if (!companyNameIndex) {
+        // Если индекс не существует, создаем его
+        await Customer.collection.createIndex({ companyName: 1 }, { unique: true, name: 'companyName_1' });
+        console.log('✅ Customer companyName index created');
+      } else {
+        console.log('✅ Customer companyName index already exists');
+      }
+    } catch (error) {
+      if (error.code === 85 || error.code === 86) {
+        // Конфликт индексов - пытаемся удалить старый и создать новый
+        try {
+          const customerIndexes = await Customer.collection.indexes();
+          const oldIndex = customerIndexes.find(idx => idx.key && idx.key.companyName);
+          if (oldIndex && oldIndex.name !== 'companyName_1') {
+            await Customer.collection.dropIndex(oldIndex.name);
+            await Customer.collection.createIndex({ companyName: 1 }, { unique: true, name: 'companyName_1' });
+            console.log(`✅ Recreated Customer companyName index`);
+          }
+        } catch (recreateError) {
+          console.warn('Warning while recreating Customer companyName index:', recreateError.message);
+        }
+      } else {
+        console.warn('Warning while checking Customer companyName index:', error.message);
+      }
+    }
+    
+    // Индексы для Carrier модели (Mongoose создает их автоматически из схемы)
+    // Не создаем их здесь, чтобы избежать конфликтов - Mongoose создаст их из схемы
+    // Просто проверяем, что они существуют
+    // ВАЖНО: companyName НЕ уникальный для Carrier (может повторяться)
+    const Carrier = mongoose.model('Carrier');
+    const carrierUniqueIndexFields = ['mcNumber', 'dotNumber', 'email']; // companyName убран - не уникальный
+    
+    for (const field of carrierUniqueIndexFields) {
+      try {
+        const carrierIndexes = await Carrier.collection.indexes();
+        const existingIndex = carrierIndexes.find(idx => idx.key && idx.key[field] && idx.unique && idx.sparse);
+        if (!existingIndex) {
+          // Если индекс не существует, создаем его
+          await Carrier.collection.createIndex({ [field]: 1 }, { unique: true, sparse: true, name: `${field}_1` });
+          console.log(`✅ Carrier ${field} unique index created`);
+        } else {
+          console.log(`✅ Carrier ${field} unique index already exists`);
+        }
+      } catch (error) {
+        if (error.code === 85 || error.code === 86) {
+          // Конфликт индексов - пытаемся удалить старый и создать новый
+          try {
+            const carrierIndexes = await Carrier.collection.indexes();
+            const oldIndex = carrierIndexes.find(idx => idx.key && idx.key[field]);
+            if (oldIndex && (oldIndex.name !== `${field}_1` || !oldIndex.unique || !oldIndex.sparse)) {
+              await Carrier.collection.dropIndex(oldIndex.name);
+              await Carrier.collection.createIndex({ [field]: 1 }, { unique: true, sparse: true, name: `${field}_1` });
+              console.log(`✅ Recreated Carrier ${field} unique index`);
+            }
+          } catch (recreateError) {
+            console.warn(`Warning while recreating Carrier ${field} index:`, recreateError.message);
+          }
+        } else {
+          console.warn(`Warning while checking Carrier ${field} index:`, error.message);
+        }
+      }
+    }
+    
+    // Проверяем, что companyName НЕ имеет уникального индекса для Carrier
+    try {
+      const carrierIndexes = await Carrier.collection.indexes();
+      const companyNameUniqueIndex = carrierIndexes.find(idx => 
+        idx.key && idx.key.companyName && idx.unique && !idx.sparse
+      );
+      if (companyNameUniqueIndex) {
+        // Если найден уникальный индекс без sparse, удаляем его
+        await Carrier.collection.dropIndex(companyNameUniqueIndex.name);
+        console.log(`✅ Removed unique index from Carrier companyName (should not be unique)`);
+        // Создаем sparse индекс без unique (если его нет)
+        const companyNameSparseIndex = carrierIndexes.find(idx => 
+          idx.key && idx.key.companyName && !idx.unique && idx.sparse
+        );
+        if (!companyNameSparseIndex) {
+          await Carrier.collection.createIndex({ companyName: 1 }, { sparse: true, name: 'companyName_1' });
+          console.log(`✅ Created sparse (non-unique) index for Carrier companyName`);
+        }
+      }
+    } catch (error) {
+      if (error.code !== 27) { // 27 = IndexNotFound
+        console.warn('Warning while checking Carrier companyName index:', error.message);
+      }
+    }
+    
     // Индексы для LoadHistory
     const LoadHistory = mongoose.model('LoadHistory');
-    await LoadHistory.collection.createIndex({ loadId: 1, createdAt: -1 });
+    await LoadHistory.collection.createIndex({ load: 1, createdAt: -1 });
     await LoadHistory.collection.createIndex({ changedBy: 1, createdAt: -1 });
-    
-    // Индексы для кэшированной статистики
-    const CachedDayStats = mongoose.model('CachedDayStats');
-    await CachedDayStats.collection.createIndex({ date: 1 }, { unique: true });
-    
-    const CachedMonthStats = mongoose.model('CachedMonthStats');
-    await CachedMonthStats.collection.createIndex({ year: 1, month: 1 }, { unique: true });
-    
-    const CachedUserDayStats = mongoose.model('CachedUserDayStats');
-    await CachedUserDayStats.collection.createIndex({ userId: 1, date: 1 }, { unique: true });
-    
-    const CachedUserMonthStats = mongoose.model('CachedUserMonthStats');
-    await CachedUserMonthStats.collection.createIndex({ userId: 1, year: 1, month: 1 }, { unique: true });
     
     console.log('Database indexes created successfully');
   } catch (error) {

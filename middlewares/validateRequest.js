@@ -15,7 +15,6 @@ const validateRequest = (req, res, next) => {
   });
 };
 
-// Middleware для валидации с Joi схемой
 const validateRequestWithSchema = (schema) => {
   return (req, res, next) => {
     const { error } = schema.validate(req);
@@ -34,4 +33,22 @@ const validateRequestWithSchema = (schema) => {
   };
 };
 
-module.exports = { validateRequest, validateRequestWithSchema };
+const validateQueryWithSchema = (schema) => {
+  return (req, res, next) => {
+    const { error } = schema.validate(req.query);
+    if (error) {
+      const extractedErrors = error.details.map(detail => ({
+        field: detail.path.join('.'),
+        message: detail.message
+      }));
+
+      return res.status(422).json({
+        message: 'Validation failed.',
+        errors: extractedErrors
+      });
+    }
+    next();
+  };
+};
+
+module.exports = { validateRequest, validateRequestWithSchema, validateQueryWithSchema };

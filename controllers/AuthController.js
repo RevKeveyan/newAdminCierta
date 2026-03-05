@@ -3,6 +3,7 @@ const ResetCode = require('../models/ResetCode');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const { sendMail } = require('../utils/mailer'); // например, nodemailer
+const { sendResetPasswordEmail } = require('../mailer/mailer'); // например, nodemailer
 const crypto = require('crypto');
 const userDTO = require('../DTO/user.dto');
 
@@ -43,7 +44,7 @@ exports.forgotPassword = async (req, res) => {
       { upsert: true }
     );
 
-    await sendMail(email, 'Reset your password', `Your verification code is: ${code}`);
+    await sendResetPasswordEmail(email, `Your verification code is ${code}`);
 
     res.status(200).json({ message: 'Verification code sent to your email' });
   } catch (err) {
@@ -78,5 +79,19 @@ exports.resetPassword = async (req, res) => {
     res.status(200).json({ message: 'Password reset successful' });
   } catch (err) {
     res.status(500).json({ error: 'Reset failed', details: err.message });
+  }
+};
+
+exports.me = async (req, res) => {
+  try {
+    const userId = req.user?.id;
+    if (!userId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+    const user = await User.findById(userId);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    return res.status(200).json({ success: true, user: userDTO(user) });
+  } catch (err) {
+    return res.status(500).json({ error: 'Failed to fetch user', details: err.message });
   }
 };

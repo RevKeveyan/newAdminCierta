@@ -21,7 +21,7 @@ const buildQuery = (query) => {
   }
 
   // ===== DATE RANGES =====
-  const dateFields = ['pickUpDate', 'deliveryDate', 'createdAt', 'assignedDate'];
+  const dateFields = ['pickUpDate', 'deliveryDate', 'createdAt', 'assignedDate', 'deadline'];
   dateFields.forEach((field) => {
     if (query[`${field}From`] || query[`${field}To`]) {
       filter[field] = {};

@@ -1,24 +1,64 @@
 const mongoose = require("mongoose");
+const { getCurrentDateUTC5 } = require("../../utils/dateUtils");
 
 const loadHistorySchema = new mongoose.Schema(
   {
-    loadId: { type: mongoose.Schema.Types.ObjectId, ref: 'Load', required: true },
+    load: { 
+      type: mongoose.Schema.Types.ObjectId, 
+      ref: 'Load', 
+      required: true,
+      index: true
+    },
     action: {
       type: String,
-      enum: ["created", "updated", "deleted", "paid", "status_updated"],
+      enum: ["created", "updated", "status_update", "assign", "delete"],
       required: true
     },
-    changedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    actor: {
+      actorId: { 
+        type: mongoose.Schema.Types.ObjectId, 
+        ref: 'User', 
+        required: true,
+        index: true
+      },
+      actorRole: { 
+        type: String, 
+        required: true 
+      },
+      actorEmail: { 
+        type: String, 
+        required: false 
+      }
+    },
     changes: [
       {
-        field: String,
-        oldValue: mongoose.Schema.Types.Mixed,
-        newValue: mongoose.Schema.Types.Mixed
+        field: { type: String, required: true },
+        from: mongoose.Schema.Types.Mixed,
+        to: mongoose.Schema.Types.Mixed
       }
     ],
-    date: { type: Date, default: Date.now }
+    createdAt: { 
+      type: Date, 
+      default: getCurrentDateUTC5,
+      index: true
+    }
   },
-  { versionKey: false }
+  { 
+    versionKey: false,
+    timestamps: false // Используем createdAt вместо timestamps
+  }
 );
+
+// Pre-save hook to set createdAt in UTC-5
+loadHistorySchema.pre('save', function(next) {
+  if (this.isNew && !this.createdAt) {
+    this.createdAt = getCurrentDateUTC5();
+  }
+  next();
+});
+
+// Индексы для оптимизации запросов
+loadHistorySchema.index({ load: 1, createdAt: -1 });
+loadHistorySchema.index({ 'actor.actorId': 1, createdAt: -1 });
 
 module.exports = mongoose.model("LoadHistory", loadHistorySchema);

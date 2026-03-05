@@ -1,0 +1,1512 @@
+{
+  "info": {
+    "name": "Cierta Statistics API",
+    "description": "Postman collection for Statistics API testing",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "item": [
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "Login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    const jsonData = pm.response.json();",
+                  "    if (jsonData.token) {",
+                  "        pm.environment.set(\"token\", jsonData.token);",
+                  "    }",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"admin@example.com\",\n  \"password\": \"password123\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "login"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Test Users",
+      "item": [
+        {
+          "name": "Create Test FreightBroker",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  "const timestamp = Date.now();",
+                  "pm.environment.set(\"testFreightBrokerEmail\", `test-freightbroker-${timestamp}@test.com`);"
+                ],
+                "type": "text/javascript"
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200 || pm.response.code === 201) {",
+                  "    const jsonData = pm.response.json();",
+                  "    if (jsonData.data) {",
+                  "        const userId = jsonData.data._id || jsonData.data.id;",
+                  "        if (userId) {",
+                  "            pm.environment.set(\"testFreightBrokerId\", userId.toString());",
+                  "        }",
+                  "        if (jsonData.data.email) {",
+                  "            pm.environment.set(\"testFreightBrokerEmail\", jsonData.data.email);",
+                  "        }",
+                  "    }",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"firstName\": \"Test\",\n  \"lastName\": \"FreightBroker\",\n  \"email\": \"{{testFreightBrokerEmail}}\",\n  \"password\": \"test123\",\n  \"role\": \"freightBroker\",\n  \"allowedCustomers\": []\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/users",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Create Test AccountingIn",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  "const timestamp = Date.now();",
+                  "pm.environment.set(\"testAccountingInEmail\", `test-accountingin-${timestamp}@test.com`);"
+                ],
+                "type": "text/javascript"
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200 || pm.response.code === 201) {",
+                  "    const jsonData = pm.response.json();",
+                  "    if (jsonData.data) {",
+                  "        const userId = jsonData.data._id || jsonData.data.id;",
+                  "        if (userId) {",
+                  "            pm.environment.set(\"testAccountingInId\", userId.toString());",
+                  "        }",
+                  "        if (jsonData.data.email) {",
+                  "            pm.environment.set(\"testAccountingInEmail\", jsonData.data.email);",
+                  "        }",
+                  "    }",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"firstName\": \"Test\",\n  \"lastName\": \"AccountingIn\",\n  \"email\": \"{{testAccountingInEmail}}\",\n  \"password\": \"test123\",\n  \"role\": \"accountingIn\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/users",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Create Test AccountingOut",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  "const timestamp = Date.now();",
+                  "pm.environment.set(\"testAccountingOutEmail\", `test-accountingout-${timestamp}@test.com`);"
+                ],
+                "type": "text/javascript"
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200 || pm.response.code === 201) {",
+                  "    const jsonData = pm.response.json();",
+                  "    if (jsonData.data) {",
+                  "        const userId = jsonData.data._id || jsonData.data.id;",
+                  "        if (userId) {",
+                  "            pm.environment.set(\"testAccountingOutId\", userId.toString());",
+                  "        }",
+                  "        if (jsonData.data.email) {",
+                  "            pm.environment.set(\"testAccountingOutEmail\", jsonData.data.email);",
+                  "        }",
+                  "    }",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"firstName\": \"Test\",\n  \"lastName\": \"AccountingOut\",\n  \"email\": \"{{testAccountingOutEmail}}\",\n  \"password\": \"test123\",\n  \"role\": \"accountingOut\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/users",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Create Test SalesAgent",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  "const timestamp = Date.now();",
+                  "pm.environment.set(\"testSalesAgentEmail\", `test-salesagent-${timestamp}@test.com`);"
+                ],
+                "type": "text/javascript"
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200 || pm.response.code === 201) {",
+                  "    const jsonData = pm.response.json();",
+                  "    if (jsonData.data) {",
+                  "        const userId = jsonData.data._id || jsonData.data.id;",
+                  "        if (userId) {",
+                  "            pm.environment.set(\"testSalesAgentId\", userId.toString());",
+                  "        }",
+                  "        if (jsonData.data.email) {",
+                  "            pm.environment.set(\"testSalesAgentEmail\", jsonData.data.email);",
+                  "        }",
+                  "    }",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"firstName\": \"Test\",\n  \"lastName\": \"SalesAgent\",\n  \"email\": \"{{testSalesAgentEmail}}\",\n  \"password\": \"test123\",\n  \"role\": \"salesAgent\",\n  \"allowedCustomers\": []\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/users",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Login as FreightBroker",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    const jsonData = pm.response.json();",
+                  "    if (jsonData.token) {",
+                  "        pm.environment.set(\"freightBrokerToken\", jsonData.token);",
+                  "    }",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{testFreightBrokerEmail}}\",\n  \"password\": \"test123\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "login"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Login as AccountingIn",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    const jsonData = pm.response.json();",
+                  "    if (jsonData.token) {",
+                  "        pm.environment.set(\"accountingInToken\", jsonData.token);",
+                  "    }",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{testAccountingInEmail}}\",\n  \"password\": \"test123\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "login"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Update FreightBroker AllowedCustomers",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"allowedCustomers\": [\"{{customerId}}\"]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/users/{{testFreightBrokerId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users",
+                "{{testFreightBrokerId}}"
+              ]
+            }
+          },
+          "description": "Обновить список разрешенных customers для freightBroker. Замените {{customerId}} на реальный ID customer."
+        }
+      ]
+    },
+    {
+      "name": "Test Load Data",
+      "item": [
+        {
+          "name": "Create Test Load (Listed Status)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  "const timestamp = Date.now();",
+                  "pm.environment.set(\"testLoadOrderId\", `TEST-LOAD-${timestamp}`);"
+                ],
+                "type": "text/javascript"
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200 || pm.response.code === 201) {",
+                  "    const jsonData = pm.response.json();",
+                  "    if (jsonData.data) {",
+                  "        const loadId = jsonData.data._id || jsonData.data.id;",
+                  "        if (loadId) {",
+                  "            pm.environment.set(\"testLoadId\", loadId.toString());",
+                  "        }",
+                  "        if (jsonData.data.orderId) {",
+                  "            pm.environment.set(\"testLoadOrderId\", jsonData.data.orderId);",
+                  "        }",
+                  "    }",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"load\": {\n    \"orderId\": \"{{testLoadOrderId}}\",\n    \"status\": \"Listed\",\n    \"customer\": {\n      \"companyName\": \"Test Customer\",\n      \"email\": \"test-customer@example.com\",\n      \"type\": \"customer\"\n    },\n    \"type\": {\n      \"freight\": true,\n      \"vehicle\": false\n    },\n    \"freight\": {\n      \"shipment\": []\n    },\n    \"pickup\": {\n      \"locationName\": \"Test Pickup Location\",\n      \"address\": {\n        \"address\": \"123 Test St\",\n        \"city\": \"Test City\",\n        \"state\": \"CA\",\n        \"zipCode\": \"12345\"\n      },\n      \"contactPhone\": \"+1234567890\"\n    },\n    \"delivery\": {\n      \"locationName\": \"Test Delivery Location\",\n      \"address\": {\n        \"address\": \"456 Test Ave\",\n        \"city\": \"Test City\",\n        \"state\": \"CA\",\n        \"zipCode\": \"54321\"\n      },\n      \"contactPhone\": \"+1234567890\"\n    },\n    \"paymentTerms\": \"15\",\n    \"customerRate\": \"1000\",\n    \"carrierRate\": \"800\"\n  }\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/loads",
+              "host": ["{{baseUrl}}"],
+              "path": ["loads"]
+            }
+          },
+          "description": "Создает тестовый Load со статусом 'Listed'. Минимальные данные для тестирования статистики."
+        },
+        {
+          "name": "Create Test Load with Customer ID",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  "const timestamp = Date.now();",
+                  "pm.environment.set(\"testLoadOrderId2\", `TEST-LOAD-${timestamp}`);"
+                ],
+                "type": "text/javascript"
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200 || pm.response.code === 201) {",
+                  "    const jsonData = pm.response.json();",
+                  "    if (jsonData.data) {",
+                  "        const loadId = jsonData.data._id || jsonData.data.id;",
+                  "        if (loadId) {",
+                  "            pm.environment.set(\"testLoadId2\", loadId.toString());",
+                  "        }",
+                  "    }",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"load\": {\n    \"orderId\": \"{{testLoadOrderId2}}\",\n    \"status\": \"Listed\",\n    \"customer\": {\n      \"id\": \"{{customerId}}\"\n    },\n    \"type\": {\n      \"freight\": true,\n      \"vehicle\": false\n    },\n    \"freight\": {\n      \"shipment\": []\n    },\n    \"pickup\": {\n      \"locationName\": \"Test Pickup\",\n      \"address\": {\n        \"address\": \"123 Test St\",\n        \"city\": \"Test City\",\n        \"state\": \"CA\",\n        \"zipCode\": \"12345\"\n      }\n    },\n    \"delivery\": {\n      \"locationName\": \"Test Delivery\",\n      \"address\": {\n        \"address\": \"456 Test Ave\",\n        \"city\": \"Test City\",\n        \"state\": \"CA\",\n        \"zipCode\": \"54321\"\n      }\n    },\n    \"paymentTerms\": \"15\",\n    \"customerRate\": \"1000\"\n  }\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/loads",
+              "host": ["{{baseUrl}}"],
+              "path": ["loads"]
+            }
+          },
+          "description": "Создает тестовый Load со статусом 'Listed' используя существующий customer ID из environment переменной {{customerId}}."
+        },
+        {
+          "name": "Get Test Load",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/loads/{{testLoadId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["loads", "{{testLoadId}}"]
+            }
+          },
+          "description": "Получить созданный тестовый Load по ID."
+        },
+        {
+          "name": "List Loads with Listed Status",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/loads/status/Listed",
+              "host": ["{{baseUrl}}"],
+              "path": ["loads", "status", "Listed"]
+            }
+          },
+          "description": "Получить список всех Loads со статусом 'Listed'."
+        }
+      ]
+    },
+    {
+      "name": "Smoke Tests",
+      "item": [
+        {
+          "name": "Stats Day System (Today)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  "const today = new Date();",
+                  "const todayStr = today.toISOString().split('T')[0];",
+                  "pm.environment.set(\"today\", todayStr);"
+                ],
+                "type": "text/javascript"
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test(\"Response has correct structure\", function () {",
+                  "    const jsonData = pm.response.json();",
+                  "    pm.expect(jsonData).to.have.property('success');",
+                  "    pm.expect(jsonData).to.have.property('data');",
+                  "    pm.expect(jsonData).to.have.property('meta');",
+                  "    pm.expect(jsonData.data).to.be.an('array');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/stats/loads?from={{today}}&to={{today}}&grain=day&entityType=system",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "stats",
+                "loads"
+              ],
+              "query": [
+                {
+                  "key": "from",
+                  "value": "{{today}}"
+                },
+                {
+                  "key": "to",
+                  "value": "{{today}}"
+                },
+                {
+                  "key": "grain",
+                  "value": "day"
+                },
+                {
+                  "key": "entityType",
+                  "value": "system"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Stats Month System (Current Month)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/stats/loads?from=2026-02-01&to=2026-02-28&grain=month&entityType=system",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "stats",
+                "loads"
+              ],
+              "query": [
+                {
+                  "key": "from",
+                  "value": "2026-02-01"
+                },
+                {
+                  "key": "to",
+                  "value": "2026-02-28"
+                },
+                {
+                  "key": "grain",
+                  "value": "month"
+                },
+                {
+                  "key": "entityType",
+                  "value": "system"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Period Tests",
+      "item": [
+        {
+          "name": "Day Period",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/stats/loads?from=2026-02-12&to=2026-02-12&grain=day&entityType=system",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "stats",
+                "loads"
+              ],
+              "query": [
+                {
+                  "key": "from",
+                  "value": "2026-02-12"
+                },
+                {
+                  "key": "to",
+                  "value": "2026-02-12"
+                },
+                {
+                  "key": "grain",
+                  "value": "day"
+                },
+                {
+                  "key": "entityType",
+                  "value": "system"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Returns single day snapshot\", function () {",
+                  "    const jsonData = pm.response.json();",
+                  "    pm.expect(jsonData.data).to.have.lengthOf(1);",
+                  "    pm.expect(jsonData.data[0].date).to.equal(\"2026-02-12\");",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Week Period",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/stats/loads?from=2026-02-01&to=2026-02-07&grain=week&entityType=system",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "stats",
+                "loads"
+              ],
+              "query": [
+                {
+                  "key": "from",
+                  "value": "2026-02-01"
+                },
+                {
+                  "key": "to",
+                  "value": "2026-02-07"
+                },
+                {
+                  "key": "grain",
+                  "value": "week"
+                },
+                {
+                  "key": "entityType",
+                  "value": "system"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Month Period",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/stats/loads?from=2026-02-01&to=2026-02-28&grain=month&entityType=system",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "stats",
+                "loads"
+              ],
+              "query": [
+                {
+                  "key": "from",
+                  "value": "2026-02-01"
+                },
+                {
+                  "key": "to",
+                  "value": "2026-02-28"
+                },
+                {
+                  "key": "grain",
+                  "value": "month"
+                },
+                {
+                  "key": "entityType",
+                  "value": "system"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Date Range (Multiple Days)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/stats/loads?from=2026-02-01&to=2026-02-12&grain=day&entityType=system",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "stats",
+                "loads"
+              ],
+              "query": [
+                {
+                  "key": "from",
+                  "value": "2026-02-01"
+                },
+                {
+                  "key": "to",
+                  "value": "2026-02-12"
+                },
+                {
+                  "key": "grain",
+                  "value": "day"
+                },
+                {
+                  "key": "entityType",
+                  "value": "system"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Returns array of days\", function () {",
+                  "    const jsonData = pm.response.json();",
+                  "    pm.expect(jsonData.data).to.be.an('array');",
+                  "    pm.expect(jsonData.meta.count).to.equal(12);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Filter Tests (Loads)",
+      "item": [
+        {
+          "name": "Status Filter - Delivered",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/stats/loads?from=2026-02-01&to=2026-02-12&grain=day&entityType=system&status=Delivered",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "stats",
+                "loads"
+              ],
+              "query": [
+                {
+                  "key": "from",
+                  "value": "2026-02-01"
+                },
+                {
+                  "key": "to",
+                  "value": "2026-02-12"
+                },
+                {
+                  "key": "grain",
+                  "value": "day"
+                },
+                {
+                  "key": "entityType",
+                  "value": "system"
+                },
+                {
+                  "key": "status",
+                  "value": "Delivered"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Only shows Delivered loads\", function () {",
+                  "    const jsonData = pm.response.json();",
+                  "    jsonData.data.forEach(day => {",
+                  "        pm.expect(day.total).to.equal(day.byStatus.delivered || 0);",
+                  "    });",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Status Filter - Expired",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/stats/loads?from=2026-02-01&to=2026-02-12&grain=day&entityType=system&status=Expired",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "stats",
+                "loads"
+              ],
+              "query": [
+                {
+                  "key": "from",
+                  "value": "2026-02-01"
+                },
+                {
+                  "key": "to",
+                  "value": "2026-02-12"
+                },
+                {
+                  "key": "grain",
+                  "value": "day"
+                },
+                {
+                  "key": "entityType",
+                  "value": "system"
+                },
+                {
+                  "key": "status",
+                  "value": "Expired"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Filter Tests (Payments)",
+      "item": [
+        {
+          "name": "Profit Calculation Check",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/stats/loads?from=2026-02-01&to=2026-02-12&grain=day&entityType=system",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "stats",
+                "loads"
+              ],
+              "query": [
+                {
+                  "key": "from",
+                  "value": "2026-02-01"
+                },
+                {
+                  "key": "to",
+                  "value": "2026-02-12"
+                },
+                {
+                  "key": "grain",
+                  "value": "day"
+                },
+                {
+                  "key": "entityType",
+                  "value": "system"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Profit = receivable.confirmed - payable.confirmed\", function () {",
+                  "    const jsonData = pm.response.json();",
+                  "    jsonData.data.forEach(day => {",
+                  "        const expectedProfit = day.receivable.money.confirmed - day.payable.money.confirmed;",
+                  "        pm.expect(day.finance.profitConfirmed).to.equal(expectedProfit);",
+                  "    });",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "RBAC / Access Tests",
+      "item": [
+        {
+          "name": "FreightBroker - System Stats (Should Fail)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{freightBrokerToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/stats/loads?from=2026-02-01&to=2026-02-12&grain=day&entityType=system",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "stats",
+                "loads"
+              ],
+              "query": [
+                {
+                  "key": "from",
+                  "value": "2026-02-01"
+                },
+                {
+                  "key": "to",
+                  "value": "2026-02-12"
+                },
+                {
+                  "key": "grain",
+                  "value": "day"
+                },
+                {
+                  "key": "entityType",
+                  "value": "system"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"FreightBroker cannot access system stats\", function () {",
+                  "    pm.expect(pm.response.code).to.equal(403);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "FreightBroker - Allowed Customer Stats (Should Pass)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{freightBrokerToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/stats/loads?from=2026-02-01&to=2026-02-12&grain=day&entityType=customer&entityId={{customerId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "stats",
+                "loads"
+              ],
+              "query": [
+                {
+                  "key": "from",
+                  "value": "2026-02-01"
+                },
+                {
+                  "key": "to",
+                  "value": "2026-02-12"
+                },
+                {
+                  "key": "grain",
+                  "value": "day"
+                },
+                {
+                  "key": "entityType",
+                  "value": "customer"
+                },
+                {
+                  "key": "entityId",
+                  "value": "{{customerId}}"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"FreightBroker can access allowed customer stats\", function () {",
+                  "    pm.expect(pm.response.code).to.equal(200);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "FreightBroker - Other Customer Stats (Should Fail)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{freightBrokerToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/stats/loads?from=2026-02-01&to=2026-02-12&grain=day&entityType=customer&entityId={{otherCustomerId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "stats",
+                "loads"
+              ],
+              "query": [
+                {
+                  "key": "from",
+                  "value": "2026-02-01"
+                },
+                {
+                  "key": "to",
+                  "value": "2026-02-12"
+                },
+                {
+                  "key": "grain",
+                  "value": "day"
+                },
+                {
+                  "key": "entityType",
+                  "value": "customer"
+                },
+                {
+                  "key": "entityId",
+                  "value": "{{otherCustomerId}}"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"FreightBroker cannot access other customer stats\", function () {",
+                  "    pm.expect(pm.response.code).to.equal(403);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "AccountingIn - Loads Stats (Should Fail)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accountingInToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/stats/loads?from=2026-02-01&to=2026-02-12&grain=day&entityType=system",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "stats",
+                "loads"
+              ],
+              "query": [
+                {
+                  "key": "from",
+                  "value": "2026-02-01"
+                },
+                {
+                  "key": "to",
+                  "value": "2026-02-12"
+                },
+                {
+                  "key": "grain",
+                  "value": "day"
+                },
+                {
+                  "key": "entityType",
+                  "value": "system"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"AccountingIn cannot access loads stats\", function () {",
+                  "    pm.expect(pm.response.code).to.equal(403);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Email Filter Tests",
+      "item": [
+        {
+          "name": "Search Customer by Email",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/stats/loads?from=2026-02-01&to=2026-02-12&grain=day&email={{customerEmail}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "stats",
+                "loads"
+              ],
+              "query": [
+                {
+                  "key": "from",
+                  "value": "2026-02-01"
+                },
+                {
+                  "key": "to",
+                  "value": "2026-02-12"
+                },
+                {
+                  "key": "grain",
+                  "value": "day"
+                },
+                {
+                  "key": "email",
+                  "value": "{{customerEmail}}"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Finds customer by email\", function () {",
+                  "    const jsonData = pm.response.json();",
+                  "    pm.expect(jsonData.meta.entityType).to.equal(\"customer\");",
+                  "    pm.expect(jsonData.meta.entityId).to.not.be.null;",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Validation Tests",
+      "item": [
+        {
+          "name": "Missing Required Params",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/stats/loads",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "stats",
+                "loads"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Returns 400 for missing dates\", function () {",
+                  "    pm.expect(pm.response.code).to.equal(400);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Invalid Date Format",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/stats/loads?from=invalid&to=2026-02-12",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "stats",
+                "loads"
+              ],
+              "query": [
+                {
+                  "key": "from",
+                  "value": "invalid"
+                },
+                {
+                  "key": "to",
+                  "value": "2026-02-12"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Returns 400 for invalid date\", function () {",
+                  "    pm.expect(pm.response.code).to.equal(400);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Missing EntityId for Non-System",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/stats/loads?from=2026-02-01&to=2026-02-12&entityType=customer",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "stats",
+                "loads"
+              ],
+              "query": [
+                {
+                  "key": "from",
+                  "value": "2026-02-01"
+                },
+                {
+                  "key": "to",
+                  "value": "2026-02-12"
+                },
+                {
+                  "key": "entityType",
+                  "value": "customer"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Returns 400 for missing entityId\", function () {",
+                  "    pm.expect(pm.response.code).to.equal(400);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Export Tests",
+      "item": [
+        {
+          "name": "Export Excel",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/stats/export?from=2026-02-01&to=2026-02-12&grain=day&entityType=system&format=xlsx",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "stats",
+                "export"
+              ],
+              "query": [
+                {
+                  "key": "from",
+                  "value": "2026-02-01"
+                },
+                {
+                  "key": "to",
+                  "value": "2026-02-12"
+                },
+                {
+                  "key": "grain",
+                  "value": "day"
+                },
+                {
+                  "key": "entityType",
+                  "value": "system"
+                },
+                {
+                  "key": "format",
+                  "value": "xlsx"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Returns Excel file\", function () {",
+                  "    pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"spreadsheetml\");",
+                  "    pm.expect(pm.response.headers.get(\"Content-Disposition\")).to.include(\".xlsx\");",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": []
+      }
+    },
+    {
+      "listen": "test",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Общие проверки для всех запросов",
+          "pm.test(\"Response has success field\", function () {",
+          "    if (pm.response.code === 200) {",
+          "        const jsonData = pm.response.json();",
+          "        pm.expect(jsonData).to.have.property('success');",
+          "    }",
+          "});",
+          "",
+          "pm.test(\"Response has data array\", function () {",
+          "    if (pm.response.code === 200) {",
+          "        const jsonData = pm.response.json();",
+          "        pm.expect(jsonData.data).to.be.an('array');",
+          "    }",
+          "});",
+          "",
+          "pm.test(\"Response has meta object\", function () {",
+          "    if (pm.response.code === 200) {",
+          "        const jsonData = pm.response.json();",
+          "        pm.expect(jsonData).to.have.property('meta');",
+          "    }",
+          "});"
+        ]
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:5000",
+      "type": "string"
+    },
+    {
+      "key": "token",
+      "value": "",
+      "type": "string"
+    }
+  ]
+}

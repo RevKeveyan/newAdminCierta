@@ -1,577 +1,828 @@
-const UniversalBaseController = require('./UniversalBaseController');
-const Load = require('../models/Load');
-const Customer = require('../models/Customer');
-const Carrier = require('../models/Carrier');
-const LoadHistory = require('../models/subModels/LoadHistory');
-const PaymentReceivable = require('../models/subModels/PaymentReceivable');
-const PaymentPayable = require('../models/subModels/PaymentPayable');
-const LoadDTO = require('../DTO/load.dto');
-const pdfService = require('../services/pdfService');
-const notificationService = require('../services/notificationService');
-const mongoose = require('mongoose');
-const fs = require('fs');
-const path = require('path');
+const UniversalBaseController = require("./UniversalBaseController");
+const Load = require("../models/Load");
+const User = require("../models/User");
+const Customer = require("../models/Customer");
+const Carrier = require("../models/Carrier");
+const LoadHistory = require("../models/subModels/LoadHistory");
+const PaymentReceivable = require("../models/subModels/PaymentReceivable");
+const PaymentPayable = require("../models/subModels/PaymentPayable");
+const LoadDTO = require("../DTO/load.dto");
+const notificationService = require("../services/notificationService");
+const notificationClient = require("../services/notificationClient");
+const loadService = require("../services/loadService");
+const customerService = require("../services/customerService");
+const carrierService = require("../services/carrierService");
+const { sendLoadDetailsEmail } = require("../mailer/mailer");
+const {
+  parseJsonField,
+  filterNullValues,
+  syncImageFields,
+  syncFreightFields,
+} = require("../utils/dataHelpers");
+const {
+  parseLoadData,
+  validateCustomerData,
+  validateCarrierData,
+  validateVehicleData,
+  validateFreightData,
+  validateDatesData,
+  validateFeesData,
+  checkDuplicateVIN,
+  validateObjectId,
+  validateCreatedBy,
+  processCustomer,
+  processCarrier,
+} = require("../utils/loadValidation");
+const {
+  prepareLoadDocument,
+  processUploadedFiles,
+  finalizeLoadDocument,
+  prepareUpdateData,
+  normalizeEmailsForLoad,
+} = require("../utils/loadHelpers");
+const {
+  updateS3KeysForEntity,
+  deleteFromS3Multiple,
+  extractKeyFromUrl,
+  getSignedUrlForObject,
+  uploadToS3,
+} = require("../services/s3Service");
+const fs = require("fs").promises;
+const crypto = require("crypto");
+const pdfService = require("../services/pdfService");
+const {
+  updateTempFileKeys,
+  fixTempKeysInLoad,
+  processDeletedFiles,
+  processUploadedFilesForUpdate,
+  updateCustomerCarrierLinks,
+  createActor,
+  formatDocument,
+  normalizeObjectIdFields,
+  getLoadsWithPagination,
+} = require("../utils/loadControllerHelpers");
+const { markDirtyForLoad, markDirtyDays } = require("../utils/markDirty");
+const mongoose = require("mongoose");
+
+function normalizeLocationAddress(location) {
+  if (!location || typeof location !== 'object') {
+    return location;
+  }
+
+  const normalized = { ...location };
+  const addressObj = (location.address && typeof location.address === 'object' && !Array.isArray(location.address))
+    ? { ...location.address }
+    : {};
+
+  if (typeof location.address === 'string' && location.address.trim() !== '') {
+    addressObj.address = location.address;
+  }
+  if (location.city && !addressObj.city) {
+    addressObj.city = location.city;
+  }
+  if (location.state && !addressObj.state) {
+    addressObj.state = location.state;
+  }
+  if ((location.zipCode || location.zip) && !addressObj.zipCode) {
+    addressObj.zipCode = location.zipCode || location.zip;
+  }
+
+  if (Object.keys(addressObj).length > 0) {
+    normalized.address = addressObj;
+  }
+
+  delete normalized.city;
+  delete normalized.state;
+  delete normalized.zipCode;
+  delete normalized.zip;
+
+  return normalized;
+}
+
+function getStep5ResetData(oldDoc) {
+  const pickup = oldDoc?.pickup
+    ? (oldDoc.pickup.toObject ? oldDoc.pickup.toObject() : oldDoc.pickup)
+    : null;
+  const delivery = oldDoc?.delivery
+    ? (oldDoc.delivery.toObject ? oldDoc.delivery.toObject() : oldDoc.delivery)
+    : null;
+
+  return {
+    carrier: null,
+    carrierEmails: [],
+    carrierPhotos: [],
+    carrierRate: null,
+    tracking: null,
+    fees: [],
+    tonu: { enabled: false },
+    paymentMethod: null,
+    paymentTerms: null,
+    insurance: null,
+    bolDocuments: [],
+    rateConfirmationDocuments: [],
+    documents: [],
+    dates: {
+      assignedDate: '',
+      deadline: '',
+      pickupDate: '',
+      pickupDateStart: '',
+      pickupDateEnd: '',
+      pickupDateType: 'Exact',
+      deliveryDate: '',
+      deliveryDateStart: '',
+      deliveryDateEnd: '',
+      deliveryDateType: 'Exact',
+      aging: ''
+    },
+    ...(pickup ? { pickup: { ...pickup, images: [] } } : {}),
+    ...(delivery ? { delivery: { ...delivery, images: [] } } : {})
+  };
+}
+
+const ADMIN_ROLES = new Set(['admin', 'manager']);
+const ACCOUNTING_ROLES = new Set(['accountingManager', 'accountingIn', 'accountingOut']);
+const STEP5_ALLOWED_PATHS = [
+  'carrier',
+  'carrierEmails',
+  'carrierRate',
+  'carrierPhotos',
+  'insurance',
+  'status',
+  'dates',
+  'paymentMethod',
+  'paymentTerms',
+  'bolDocuments',
+  'rateConfirmationDocuments',
+  'documents',
+  'fees',
+  'tonu',
+  'tracking',
+  'pickup.images',
+  'delivery.images'
+];
+const STEP1_4_ALLOWED_PATHS = [
+  'orderId',
+  'customer',
+  'customerEmails',
+  'customerRate',
+  'loadCustomerRepresentativePeoples',
+  'type',
+  'vehicle',
+  'freight',
+  'pickup',
+  'delivery',
+  'dates.assignedDate',
+  'dates.deadline'
+];
+const PAYMENT_VIEW_ROLES = new Set(['admin', 'accountingManager', 'accountingIn', 'accountingOut']);
+
+function getIdString(value) {
+  if (!value) return null;
+  if (typeof value === 'string') return value;
+  if (value._id) return value._id.toString();
+  if (value.id) return value.id.toString();
+  if (value.toString) return value.toString();
+  return null;
+}
+
+function getPathValue(source, path) {
+  if (!source || !path) return undefined;
+  const parts = path.split('.');
+  let current = source;
+  for (const part of parts) {
+    if (!current || typeof current !== 'object' || !(part in current)) {
+      return undefined;
+    }
+    current = current[part];
+  }
+  return current;
+}
+
+function setPathValue(target, path, value) {
+  const parts = path.split('.');
+  let current = target;
+  for (let i = 0; i < parts.length - 1; i++) {
+    const part = parts[i];
+    if (!current[part] || typeof current[part] !== 'object') {
+      current[part] = {};
+    }
+    current = current[part];
+  }
+  current[parts[parts.length - 1]] = value;
+}
+
+function pickByPaths(source, paths) {
+  if (!source || typeof source !== 'object') return source;
+  const result = {};
+  paths.forEach((path) => {
+    const value = getPathValue(source, path);
+    if (value !== undefined) {
+      setPathValue(result, path, value);
+    }
+  });
+  return result;
+}
+
+function filterLoadDataByRole(role, loadData) {
+  if (!loadData || typeof loadData !== 'object') return loadData;
+  if (role === 'dispatcher') {
+    return pickByPaths(loadData, STEP5_ALLOWED_PATHS);
+  }
+  if (role === 'Pre-dispatcher') {
+    const filtered = pickByPaths(loadData, STEP1_4_ALLOWED_PATHS);
+    if (filtered.pickup && Object.prototype.hasOwnProperty.call(filtered.pickup, 'images')) {
+      delete filtered.pickup.images;
+    }
+    if (filtered.delivery && Object.prototype.hasOwnProperty.call(filtered.delivery, 'images')) {
+      delete filtered.delivery.images;
+    }
+    return filtered;
+  }
+  return loadData;
+}
+
+async function resolveAccessContext(req) {
+  const userId = req.user?.id;
+  if (!userId) {
+    return { error: { status: 401, error: 'Authentication required' } };
+  }
+  const user = await User.findById(userId).select('role allowedCustomers').lean();
+  if (!user) {
+    return { error: { status: 401, error: 'User not found' } };
+  }
+  const allowedCustomerIds = Array.isArray(user.allowedCustomers)
+    ? user.allowedCustomers.map((id) => id.toString())
+    : [];
+  return { user, role: user.role, allowedCustomerIds };
+}
+
+async function getPlatformCustomerIds() {
+  const customers = await Customer.find({ type: 'platform' }).select('_id').lean();
+  return customers.map((item) => item._id.toString());
+}
+
+function mergeFilters(accessFilter, baseFilter) {
+  const hasAccess = accessFilter && Object.keys(accessFilter).length > 0;
+  const hasBase = baseFilter && Object.keys(baseFilter).length > 0;
+  if (hasAccess && hasBase) {
+    return { $and: [accessFilter, baseFilter] };
+  }
+  if (hasAccess) return accessFilter;
+  return baseFilter || {};
+}
+
+async function getAccessFilter(context) {
+  const { role, user, allowedCustomerIds } = context;
+  if (ADMIN_ROLES.has(role)) {
+    return { filter: {} };
+  }
+  if (ACCOUNTING_ROLES.has(role)) {
+    return { error: { status: 403, error: 'Access denied' } };
+  }
+  if (role === 'partner') {
+    return { partnerOnly: true };
+  }
+  if (role === 'freightBroker') {
+    return { filter: { createdBy: user._id } };
+  }
+  if (role === 'dispatcher' || role === 'Pre-dispatcher' || role === 'bidAgent') {
+    return { filter: { customer: { $in: allowedCustomerIds } } };
+  }
+  if (role === 'salesAgent') {
+    const platformCustomerIds = await getPlatformCustomerIds();
+    return { filter: { customer: { $in: platformCustomerIds } }, platformCustomerIds };
+  }
+  return { error: { status: 403, error: 'Access denied' } };
+}
+
+async function isPlatformLoad(load) {
+  const customer = load?.customer;
+  if (customer && typeof customer === 'object' && customer.type) {
+    return customer.type === 'platform';
+  }
+  const customerId = getIdString(customer);
+  if (!customerId) return false;
+  const customerDoc = await Customer.findById(customerId).select('type').lean();
+  return customerDoc?.type === 'platform';
+}
+
+async function hasLoadReadAccess(context, load) {
+  const { role, user, allowedCustomerIds } = context;
+  if (ADMIN_ROLES.has(role)) return true;
+  if (ACCOUNTING_ROLES.has(role) || role === 'partner') return false;
+  if (role === 'freightBroker') {
+    return getIdString(load.createdBy) === user._id.toString();
+  }
+  if (role === 'dispatcher' || role === 'Pre-dispatcher' || role === 'bidAgent') {
+    const customerId = getIdString(load.customer);
+    return customerId ? allowedCustomerIds.includes(customerId) : false;
+  }
+  if (role === 'salesAgent') {
+    return await isPlatformLoad(load);
+  }
+  return false;
+}
+
+function canCreateLoad(role) {
+  return ADMIN_ROLES.has(role) || role === 'freightBroker' || role === 'salesAgent' || role === 'Pre-dispatcher';
+}
+
+function canUpdateLoad(role) {
+  return ADMIN_ROLES.has(role) || role === 'freightBroker' || role === 'salesAgent' || role === 'dispatcher' || role === 'Pre-dispatcher';
+}
+
+function canUpdateStatus(role) {
+  return ADMIN_ROLES.has(role) || role === 'freightBroker' || role === 'salesAgent' || role === 'dispatcher';
+}
+
+function formatPartnerLoad(load) {
+  const formatted = LoadDTO.LoadDTO?.format ? LoadDTO.LoadDTO.format(load) : load;
+  return {
+    id: formatted.id,
+    orderId: formatted.orderId,
+    status: formatted.status,
+    type: formatted.type,
+    vehicle: formatted.vehicle,
+    freight: formatted.freight,
+    pickup: formatted.pickup,
+    delivery: formatted.delivery,
+    dates: formatted.dates
+  };
+}
+
+function stripPaymentFields(load) {
+  if (!load || typeof load !== 'object') return load;
+  const { paymentReceivable, paymentPayable, ...rest } = load;
+  return rest;
+}
+
+function maybeStripPaymentFields(role, load) {
+  if (PAYMENT_VIEW_ROLES.has(role)) {
+    return load;
+  }
+  return stripPaymentFields(load);
+}
+
+/**
+ * Helper to convert array of S3 keys to signed URLs
+ * Filters out invalid keys (files that don't exist in S3)
+ */
+async function convertArrayToSignedUrls(arr) {
+  if (!Array.isArray(arr) || arr.length === 0) return arr;
+  const results = await Promise.all(
+    arr.map(async (key) => {
+      // If already a signed URL, return as-is
+      if (typeof key === 'string' && key && (key.startsWith('http://') || key.startsWith('https://'))) {
+        return key;
+      }
+      // If it's an S3 key, try to get signed URL
+      if (typeof key === 'string' && key && !key.startsWith('http')) {
+        try {
+          const signedUrl = await getSignedUrlForObject(key, 3600);
+          // Only return signed URL if it was successfully generated
+          // If file doesn't exist, getSignedUrlForObject returns null
+          return signedUrl;
+        } catch (error) {
+          console.warn(`Failed to generate signed URL for key: ${key}`, error.message);
+          return null; // Filter out invalid keys
+        }
+      }
+      return key;
+    })
+  );
+  // Filter out null values (files that don't exist)
+  return results.filter(url => url !== null && url !== undefined);
+}
+
+/**
+ * Универсальная функция для конвертации массивов полей в signed URLs
+ * Модифицирует объект напрямую
+ * @param {Object} obj - объект для обработки
+ * @param {Array<string>} fields - массив имен полей для конвертации
+ */
+async function convertFieldsToSignedUrls(obj, fields) {
+  if (!obj || !Array.isArray(fields) || fields.length === 0) return;
+  
+  // Конвертируем все указанные поля
+  await Promise.all(
+    fields.map(async (field) => {
+      if (obj[field] && Array.isArray(obj[field])) {
+        obj[field] = await convertArrayToSignedUrls(obj[field]);
+      }
+    })
+  );
+}
+
+/**
+ * Helper to add signed URLs to load object
+ * Converts all S3 keys in load data to signed URLs
+ */
+async function addSignedUrlsToLoad(load) {
+  if (!load) return load;
+  
+  const result = { ...load };
+  
+  await convertFieldsToSignedUrls(result, [
+    'images',
+    'pdfs',
+    'bolDocuments',
+    'rateConfirmationDocuments',
+    'documents',
+    'carrierPhotos'
+  ]);
+
+  // Convert single file paths
+  if (result.bolPdfPath && typeof result.bolPdfPath === 'string' && !result.bolPdfPath.startsWith('http')) {
+    const signedUrl = await getSignedUrlForObject(result.bolPdfPath, 3600);
+    if (signedUrl) result.bolPdfPath = signedUrl;
+  }
+  if (result.rateConfirmationPdfPath && typeof result.rateConfirmationPdfPath === 'string' && !result.rateConfirmationPdfPath.startsWith('http')) {
+    const signedUrl = await getSignedUrlForObject(result.rateConfirmationPdfPath, 3600);
+    if (signedUrl) result.rateConfirmationPdfPath = signedUrl;
+  }
+  
+  // Convert pickup images
+  if (result.pickup) {
+    result.pickup = { ...result.pickup };
+    await convertFieldsToSignedUrls(result.pickup, ['images']);
+  }
+  
+  // Convert delivery images
+  if (result.delivery) {
+    result.delivery = { ...result.delivery };
+    await convertFieldsToSignedUrls(result.delivery, ['images']);
+  }
+  
+  // Convert vehicle images and pdfs
+  if (result.vehicle) {
+    result.vehicle = { ...result.vehicle };
+    await convertFieldsToSignedUrls(result.vehicle, ['vehicleImages', 'pdfs']);
+  }
+  
+  // Convert freight images and pdfs
+  if (result.freight) {
+    result.freight = { ...result.freight };
+    await convertFieldsToSignedUrls(result.freight, ['freightImages', 'pdfs']);
+  }
+  
+  return result;
+}
+
+function escapeRegex(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 
 class LoadController extends UniversalBaseController {
   constructor() {
     super(Load, {
       historyModel: LoadHistory,
       dto: LoadDTO.LoadDTO,
-      populateFields: ['createdBy', 'carrier', 'customer', 'paymentReceivable', 'paymentPayable'],
-      searchFields: ['orderId', 'status', 'tracking'],
+      populateFields: [
+        "createdBy",
+        "updatedBy",
+        "carrier",
+        "customer",
+        "paymentReceivable",
+        "paymentPayable",
+      ],
+      searchFields: [
+        "orderId",
+        "status",
+        "tracking",
+        "customerRate",
+        "carrierRate",
+        "customerEmails",
+        "carrierEmails",
+        "paymentMethod",
+        "paymentTerms",
+        "pickup.locationName",
+        "pickup.contactPhone",
+        "pickup.notes",
+        "pickup.date",
+        "pickup.address.address",
+        "pickup.address.city",
+        "pickup.address.state",
+        "pickup.address.zipCode",
+        "pickup.address.name",
+        "delivery.locationName",
+        "delivery.contactPhone",
+        "delivery.notes",
+        "delivery.date",
+        "delivery.address.address",
+        "delivery.address.city",
+        "delivery.address.state",
+        "delivery.address.zipCode",
+        "delivery.address.name",
+        "insurance.type",
+        "insurance.customAmount",
+        "dates.assignedDate",
+        "dates.deadline",
+        "dates.pickupDate",
+        "dates.pickupDateStart",
+        "dates.pickupDateEnd",
+        "dates.deliveryDate",
+        "dates.deliveryDateStart",
+        "dates.deliveryDateEnd",
+        "dates.aging",
+        "vehicle.specialRequirements",
+        "vehicle.shipment.vin",
+        "vehicle.shipment.make",
+        "vehicle.shipment.model",
+        "vehicle.shipment.year",
+        "vehicle.shipment.value",
+        "freight.shipment.commodity",
+        "freight.shipment.dimensionsLength",
+        "freight.shipment.dimensionsWidth",
+        "freight.shipment.dimensionsHeight",
+        "freight.shipment.dimensionsUnit",
+        "freight.shipment.onPallets",
+        "freight.shipment.weight",
+        "freight.shipment.shipmentUnits",
+        "freight.shipment.poNumber",
+        "freight.shipment.pickupNumber",
+        "freight.shipment.deliveryReference",
+        "fees.type",
+        "fees.carrierRate",
+        "fees.customerRate",
+        "fees.total",
+        "tonu.carrierRate",
+        "tonu.customerRate",
+        "loadCarrierPeople.fullName",
+        "loadCarrierPeople.email",
+        "loadCarrierPeople.phoneNumber",
+        "loadCustomerRepresentativePeoples.fullName",
+        "loadCustomerRepresentativePeoples.email",
+        "loadCustomerRepresentativePeoples.phoneNumber",
+      ],
+      allowedFilters: [
+        "orderId",
+        "status",
+        "tracking",
+        "dates.pickupDate",
+        "dates.deliveryDate",
+        "dates.assignedDate",
+        "dates.deadline",
+        "createdAt",
+        "customer",
+        "carrier",
+        "createdBy",
+        "type",
+        "paymentMethod",
+        "paymentTerms",
+        "tonu.enabled",
+      ],
       validationRules: {
         create: {
-          orderId: { required: false, type: 'string' },
-          'customer.companyName': { required: false, type: 'string' },
-          'carrier.name': { required: false, type: 'string' }
+          orderId: { required: false, type: "string" },
+          "customer.companyName": { required: false, type: "string" },
+          "carrier.name": { required: false, type: "string" },
+          status: { 
+            type: "string", 
+            enum: ["Listed", "Dispatched", "Picked Up", "Delivered", "On Hold", "Cancelled"],
+            required: false 
+          },
         },
         update: {
-          orderId: { type: 'string' },
-          status: { type: 'string' },
-          tracking: { type: 'string' }
-        }
-      }
+          orderId: { type: "string" },
+          status: { 
+            type: "string",
+            enum: ["Listed", "Dispatched", "Picked Up", "Delivered", "On Hold", "Cancelled"]
+          },
+          tracking: { type: "string" },
+        },
+      },
     });
   }
 
-  // Вспомогательный метод для создания или получения Customer
-  async findOrCreateCustomer(customerData) {
-    if (!customerData) {
-      return null;
-    }
-
-    // Если передан ID существующего customer
-    if (customerData.id && mongoose.Types.ObjectId.isValid(customerData.id)) {
-      const existingCustomer = await Customer.findById(customerData.id);
-      if (existingCustomer) {
-        // Обновляем данные customer, если пришли новые
-        let updated = false;
-        if (customerData.companyName && customerData.companyName !== existingCustomer.companyName) {
-          existingCustomer.companyName = customerData.companyName;
-          updated = true;
-        }
-        if (customerData.customerAddress) {
-          existingCustomer.customerAddress = customerData.customerAddress;
-          updated = true;
-        }
-        if (customerData.emails && customerData.emails.length > 0) {
-          const uniqueEmails = [...new Set([...existingCustomer.emails, ...customerData.emails])];
-          existingCustomer.emails = uniqueEmails;
-          updated = true;
-        }
-        if (customerData.phoneNumber) {
-          existingCustomer.phoneNumber = customerData.phoneNumber;
-          updated = true;
-        }
-        if (updated) {
-          await existingCustomer.save();
-        }
-        return existingCustomer._id;
+  buildFilter(filters, search) {
+    const filter = super.buildFilter(filters, search);
+    if (filter.type !== undefined) {
+      const typeVal = filter.type;
+      delete filter.type;
+      if (typeVal === 'freight') {
+        filter['type.freight'] = true;
+      } else if (typeVal === 'vehicle') {
+        filter['type.vehicle'] = true;
       }
     }
-
-    // Если нет companyName или это пустая строка, не можем создать/найти customer
-    if (!customerData.companyName || customerData.companyName.trim() === '') {
-      return null;
+    if (filter['tonu.enabled'] !== undefined) {
+      const v = filter['tonu.enabled'];
+      if (v === true || v === 'true' || v === '1') filter['tonu.enabled'] = true;
+      else if (v === false || v === 'false' || v === '0') filter['tonu.enabled'] = false;
+      else delete filter['tonu.enabled'];
     }
-
-    // Ищем существующего customer по companyName (точное совпадение, case-insensitive)
-    const companyNameTrimmed = customerData.companyName.trim();
-    let customer = await Customer.findOne({ 
-      companyName: { $regex: new RegExp(`^${companyNameTrimmed}$`, 'i') }
-    });
-
-    if (!customer) {
-      // Создаем нового customer
-      customer = new Customer({
-        companyName: companyNameTrimmed,
-        customerAddress: customerData.customerAddress || {},
-        emails: customerData.emails || [],
-        phoneNumber: customerData.phoneNumber
-      });
-      await customer.save();
-    } else {
-      // Обновляем существующего customer, если пришли новые данные
-      let updated = false;
-      if (customerData.customerAddress) {
-        customer.customerAddress = customerData.customerAddress;
-        updated = true;
-      }
-      if (customerData.emails && customerData.emails.length > 0) {
-        // Объединяем emails, убирая дубликаты
-        const uniqueEmails = [...new Set([...customer.emails, ...customerData.emails])];
-        customer.emails = uniqueEmails;
-        updated = true;
-      }
-      if (customerData.phoneNumber) {
-        customer.phoneNumber = customerData.phoneNumber;
-        updated = true;
-      }
-      if (updated) {
-        await customer.save();
-      }
-    }
-
-    return customer._id;
+    return filter;
   }
 
-  // Вспомогательный метод для создания или получения Carrier
-  async findOrCreateCarrier(carrierData) {
-    if (!carrierData) {
-      return null;
-    }
-
-    // Если передан ID существующего carrier
-    if (carrierData.id && mongoose.Types.ObjectId.isValid(carrierData.id)) {
-      const existingCarrier = await Carrier.findById(carrierData.id);
-      if (existingCarrier) {
-        // Обновляем данные carrier, если пришли новые
-        let updated = false;
-        if (carrierData.name && carrierData.name !== existingCarrier.name) {
-          existingCarrier.name = carrierData.name;
-          updated = true;
-        }
-        if (carrierData.phoneNumber) {
-          existingCarrier.phoneNumber = carrierData.phoneNumber;
-          updated = true;
-        }
-        if (carrierData.email) {
-          existingCarrier.email = carrierData.email;
-          updated = true;
-        }
-        if (carrierData.companyName) {
-          existingCarrier.companyName = carrierData.companyName;
-          updated = true;
-        }
-        if (carrierData.mcNumber) {
-          existingCarrier.mcNumber = carrierData.mcNumber;
-          updated = true;
-        }
-        if (carrierData.dotNumber) {
-          existingCarrier.dotNumber = carrierData.dotNumber;
-          updated = true;
-        }
-        if (carrierData.address) {
-          existingCarrier.address = carrierData.address;
-          updated = true;
-        }
-        if (carrierData.emails && carrierData.emails.length > 0) {
-          const uniqueEmails = [...new Set([...existingCarrier.emails, ...carrierData.emails])];
-          existingCarrier.emails = uniqueEmails;
-          updated = true;
-        }
-        if (carrierData.photos && carrierData.photos.length > 0) {
-          existingCarrier.photos = [...new Set([...existingCarrier.photos, ...carrierData.photos])];
-          updated = true;
-        }
-        if (carrierData.equipmentType && carrierData.equipmentType.trim() !== '') {
-          existingCarrier.equipmentType = carrierData.equipmentType.trim();
-          updated = true;
-        }
-        if (carrierData.size && carrierData.size.trim() !== '') {
-          existingCarrier.size = carrierData.size.trim();
-          updated = true;
-        }
-        if (Array.isArray(carrierData.capabilities)) {
-          const filteredCapabilities = carrierData.capabilities.filter(c => c && c.trim() !== '');
-          if (filteredCapabilities.length > 0) {
-            existingCarrier.capabilities = [...new Set([...(existingCarrier.capabilities || []), ...filteredCapabilities])];
-            updated = true;
-          }
-        }
-        if (Array.isArray(carrierData.certifications)) {
-          const filteredCertifications = carrierData.certifications.filter(c => c && c.trim() !== '');
-          if (filteredCertifications.length > 0) {
-            existingCarrier.certifications = [...new Set([...(existingCarrier.certifications || []), ...filteredCertifications])];
-            updated = true;
-          }
-        }
-        if (updated) {
-          await existingCarrier.save();
-        }
-        return existingCarrier._id;
-      }
-    }
-
-    // Ищем существующего carrier по уникальным идентификаторам
-    let carrier = null;
-    
-    // Приоритет поиска: email > mcNumber > dotNumber > (name + companyName)
-    if (carrierData.email && carrierData.email.trim() !== '') {
-      carrier = await Carrier.findOne({ email: carrierData.email.trim().toLowerCase() });
-    }
-    
-    if (!carrier && carrierData.mcNumber && carrierData.mcNumber.trim() !== '') {
-      carrier = await Carrier.findOne({ mcNumber: carrierData.mcNumber.trim() });
-    }
-    
-    if (!carrier && carrierData.dotNumber && carrierData.dotNumber.trim() !== '') {
-      carrier = await Carrier.findOne({ dotNumber: carrierData.dotNumber.trim() });
-    }
-    
-    // Если не нашли по уникальным полям, ищем по комбинации name и companyName
-    if (!carrier && carrierData.name && carrierData.companyName) {
-      carrier = await Carrier.findOne({
-        name: { $regex: new RegExp(`^${carrierData.name}$`, 'i') },
-        companyName: { $regex: new RegExp(`^${carrierData.companyName}$`, 'i') }
-      });
-    }
-    
-    // Если не нашли, пробуем только по name
-    if (!carrier && carrierData.name) {
-      carrier = await Carrier.findOne({ 
-        name: { $regex: new RegExp(`^${carrierData.name}$`, 'i') }
-      });
-    }
-
-    if (!carrier) {
-      // Создаем нового carrier, если не нашли существующего
-      // Проверяем, что есть хотя бы name или companyName (не пустые строки)
-      const hasName = carrierData.name && carrierData.name.trim() !== '';
-      const hasCompanyName = carrierData.companyName && carrierData.companyName.trim() !== '';
-      
-      if (!hasName && !hasCompanyName) {
-        // Если нет ни name, ни companyName, не можем создать carrier
-        return null;
-      }
-      
-      // Проверяем уникальность email, mcNumber, и dotNumber перед созданием
-      const emailToCheck = carrierData.email && carrierData.email.trim() !== '' ? carrierData.email.trim().toLowerCase() : null;
-      const mcNumberToCheck = carrierData.mcNumber && carrierData.mcNumber.trim() !== '' ? carrierData.mcNumber.trim() : null;
-      const dotNumberToCheck = carrierData.dotNumber && carrierData.dotNumber.trim() !== '' ? carrierData.dotNumber.trim() : null;
-      
-      // Проверяем на дубликаты
-      const duplicateChecks = [];
-      if (emailToCheck) {
-        duplicateChecks.push(Carrier.findOne({ email: emailToCheck }).select('_id name email'));
-      }
-      if (mcNumberToCheck) {
-        duplicateChecks.push(Carrier.findOne({ mcNumber: mcNumberToCheck }).select('_id name mcNumber'));
-      }
-      if (dotNumberToCheck) {
-        duplicateChecks.push(Carrier.findOne({ dotNumber: dotNumberToCheck }).select('_id name dotNumber'));
-      }
-      
-      if (duplicateChecks.length > 0) {
-        const duplicates = await Promise.all(duplicateChecks);
-        const duplicate = duplicates.find(d => d !== null);
-        
-        if (duplicate) {
-          // Найден дубликат - выбрасываем ошибку
-          let duplicateField = '';
-          let duplicateValue = '';
-          if (duplicate.email === emailToCheck) {
-            duplicateField = 'email';
-            duplicateValue = emailToCheck;
-          } else if (duplicate.mcNumber === mcNumberToCheck) {
-            duplicateField = 'MC Number';
-            duplicateValue = mcNumberToCheck;
-          } else if (duplicate.dotNumber === dotNumberToCheck) {
-            duplicateField = 'DOT Number';
-            duplicateValue = dotNumberToCheck;
-          }
-          
-          throw new Error(`Carrier with ${duplicateField} "${duplicateValue}" already exists (Carrier: ${duplicate.name || 'Unknown'})`);
-        }
-      }
-      
-      carrier = new Carrier({
-        name: hasName ? carrierData.name.trim() : (hasCompanyName ? carrierData.companyName.trim() : ''),
-        phoneNumber: carrierData.phoneNumber && carrierData.phoneNumber.trim() !== '' ? carrierData.phoneNumber.trim() : undefined,
-        email: emailToCheck,
-        companyName: hasCompanyName ? carrierData.companyName.trim() : undefined,
-        mcNumber: mcNumberToCheck,
-        dotNumber: dotNumberToCheck,
-        address: carrierData.address || {},
-        emails: carrierData.emails || [],
-        photos: carrierData.photos || [],
-        equipmentType: carrierData.equipmentType && carrierData.equipmentType.trim() !== '' ? carrierData.equipmentType.trim() : undefined,
-        size: carrierData.size && carrierData.size.trim() !== '' ? carrierData.size.trim() : undefined,
-        capabilities: Array.isArray(carrierData.capabilities) ? carrierData.capabilities.filter(c => c && c.trim() !== '') : [],
-        certifications: Array.isArray(carrierData.certifications) ? carrierData.certifications.filter(c => c && c.trim() !== '') : []
-      });
-      
-      try {
-        await carrier.save();
-      } catch (saveError) {
-        // Обрабатываем ошибки уникальности от MongoDB
-        if (saveError.code === 11000) {
-          const duplicateField = Object.keys(saveError.keyPattern)[0];
-          throw new Error(`Carrier with ${duplicateField} "${carrierData[duplicateField]}" already exists`);
-        }
-        throw saveError;
-      }
-    } else {
-      // Обновляем существующего carrier, если пришли новые данные
-      let updated = false;
-      if (carrierData.name && carrierData.name !== carrier.name) {
-        carrier.name = carrierData.name;
-        updated = true;
-      }
-      if (carrierData.phoneNumber) {
-        carrier.phoneNumber = carrierData.phoneNumber;
-        updated = true;
-      }
-      
-      // Проверяем уникальность email перед обновлением
-      if (carrierData.email && carrierData.email.trim() !== '') {
-        const newEmail = carrierData.email.trim().toLowerCase();
-        if (newEmail !== carrier.email) {
-          // Проверяем, не используется ли этот email другим carrier
-          const existingCarrierWithEmail = await Carrier.findOne({ 
-            email: newEmail,
-            _id: { $ne: carrier._id }
-          });
-          if (existingCarrierWithEmail) {
-            throw new Error(`Carrier with email "${newEmail}" already exists (Carrier: ${existingCarrierWithEmail.name || 'Unknown'})`);
-          }
-          carrier.email = newEmail;
-          updated = true;
-        }
-      }
-      
-      if (carrierData.companyName) {
-        carrier.companyName = carrierData.companyName;
-        updated = true;
-      }
-      
-      // Проверяем уникальность mcNumber перед обновлением
-      if (carrierData.mcNumber && carrierData.mcNumber.trim() !== '') {
-        const newMcNumber = carrierData.mcNumber.trim();
-        if (newMcNumber !== carrier.mcNumber) {
-          // Проверяем, не используется ли этот mcNumber другим carrier
-          const existingCarrierWithMc = await Carrier.findOne({ 
-            mcNumber: newMcNumber,
-            _id: { $ne: carrier._id }
-          });
-          if (existingCarrierWithMc) {
-            throw new Error(`Carrier with MC Number "${newMcNumber}" already exists (Carrier: ${existingCarrierWithMc.name || 'Unknown'})`);
-          }
-          carrier.mcNumber = newMcNumber;
-          updated = true;
-        }
-      }
-      
-      // Проверяем уникальность dotNumber перед обновлением
-      if (carrierData.dotNumber && carrierData.dotNumber.trim() !== '') {
-        const newDotNumber = carrierData.dotNumber.trim();
-        if (newDotNumber !== carrier.dotNumber) {
-          // Проверяем, не используется ли этот dotNumber другим carrier
-          const existingCarrierWithDot = await Carrier.findOne({ 
-            dotNumber: newDotNumber,
-            _id: { $ne: carrier._id }
-          });
-          if (existingCarrierWithDot) {
-            throw new Error(`Carrier with DOT Number "${newDotNumber}" already exists (Carrier: ${existingCarrierWithDot.name || 'Unknown'})`);
-          }
-          carrier.dotNumber = newDotNumber;
-          updated = true;
-        }
-      }
-      if (carrierData.address) {
-        carrier.address = carrierData.address;
-        updated = true;
-      }
-      if (carrierData.emails && carrierData.emails.length > 0) {
-        const uniqueEmails = [...new Set([...carrier.emails, ...carrierData.emails])];
-        carrier.emails = uniqueEmails;
-        updated = true;
-      }
-      if (carrierData.photos && carrierData.photos.length > 0) {
-        carrier.photos = [...new Set([...carrier.photos, ...carrierData.photos])];
-        updated = true;
-      }
-      if (carrierData.equipmentType && carrierData.equipmentType.trim() !== '') {
-        carrier.equipmentType = carrierData.equipmentType.trim();
-        updated = true;
-      }
-      if (carrierData.size && carrierData.size.trim() !== '') {
-        carrier.size = carrierData.size.trim();
-        updated = true;
-      }
-      if (Array.isArray(carrierData.capabilities)) {
-        const filteredCapabilities = carrierData.capabilities.filter(c => c && c.trim() !== '');
-        if (filteredCapabilities.length > 0) {
-          carrier.capabilities = [...new Set([...(carrier.capabilities || []), ...filteredCapabilities])];
-          updated = true;
-        }
-      }
-      if (Array.isArray(carrierData.certifications)) {
-        const filteredCertifications = carrierData.certifications.filter(c => c && c.trim() !== '');
-        if (filteredCertifications.length > 0) {
-          carrier.certifications = [...new Set([...(carrier.certifications || []), ...filteredCertifications])];
-          updated = true;
-        }
-      }
-      if (updated) {
-        try {
-          await carrier.save();
-        } catch (saveError) {
-          // Обрабатываем ошибки уникальности от MongoDB
-          if (saveError.code === 11000) {
-            const duplicateField = Object.keys(saveError.keyPattern)[0];
-            throw new Error(`Carrier with ${duplicateField} "${carrierData[duplicateField]}" already exists`);
-          }
-          throw saveError;
-        }
-      }
-    }
-
-    return carrier._id;
-  }
-
-  /**
-   * Создает платежные записи (PaymentReceivable и PaymentPayable) при переходе в статус "Delivered"
-   * Также сохраняет ссылки на созданные payments в Load
-   * @param {Object} load - документ Load
-   * @param {String} userId - ID пользователя, который создает записи
-   */
-  async createPaymentsOnDelivered(load, userId) {
+  getAll = async (req, res) => {
     try {
-      let receivable = null;
-      let payable = null;
-      let receivableIsNew = false;
-      let payableIsNew = false;
-
-      // Создаем PaymentReceivable (от customer), если есть customer
-      if (load.customer) {
-        // Проверяем, не создан ли уже PaymentReceivable для этого load
-        const existingReceivable = await PaymentReceivable.findOne({ loadId: load._id });
-        
-        if (!existingReceivable) {
-          const receivableData = {
-            loadId: load._id,
-            customer: load.customer,
-            daysToPay: 30, // Default 30 days
-            invoiceStatus: 'pending'
-          };
-
-          receivable = await PaymentReceivable.create(receivableData);
-          receivableIsNew = true;
-          console.log(`[LoadController] Created PaymentReceivable ${receivable._id} for load ${load.orderId}`);
-        } else {
-          receivable = existingReceivable;
-        }
-      }
-
-      // Создаем PaymentPayable (для carrier), если есть carrier
-      if (load.carrier) {
-        // Проверяем, не создан ли уже PaymentPayable для этого load
-        const existingPayable = await PaymentPayable.findOne({ loadId: load._id });
-        
-        if (!existingPayable) {
-          // Получаем данные carrier для банковских реквизитов
-          const carrier = await Carrier.findById(load.carrier);
-          
-          const payableData = {
-            loadId: load._id,
-            carrier: load.carrier
-          };
-
-          // Копируем банковские реквизиты из carrier
-          if (carrier) {
-            payableData.bank = carrier.bankAccount || null;
-            payableData.routing = carrier.routing || null;
-            payableData.accountNumber = carrier.accountNumber || null;
-          }
-
-          payable = await PaymentPayable.create(payableData);
-          payableIsNew = true;
-          console.log(`[LoadController] Created PaymentPayable ${payable._id} for load ${load.orderId}`);
-        } else {
-          payable = existingPayable;
-        }
-      }
-
-      // Обновляем Load с ссылками на созданные payments
-      const updateData = {};
-      if (receivable) {
-        updateData.paymentReceivable = receivable._id;
-      }
-      if (payable) {
-        updateData.paymentPayable = payable._id;
-      }
-
-      if (Object.keys(updateData).length > 0) {
-        await Load.findByIdAndUpdate(load._id, updateData);
-        console.log(`[LoadController] Updated Load ${load.orderId} with payment references`);
-      }
-
-      // === ОТПРАВКА УВЕДОМЛЕНИЙ ===
-      
-      // 1. Уведомление о доставке Load (с информацией о платежах)
-      notificationService.sendLoadDelivered(load, receivable, payable, userId)
-        .catch(error => {
-          console.error('[LoadController] Failed to send load delivered notification:', error);
+      const accessContext = await resolveAccessContext(req);
+      if (accessContext.error) {
+        return res.status(accessContext.error.status).json({
+          success: false,
+          error: accessContext.error.error
         });
+      }
+      const accessFilterResult = await getAccessFilter(accessContext);
+      if (accessFilterResult.error) {
+        return res.status(accessFilterResult.error.status).json({
+          success: false,
+          error: accessFilterResult.error.error
+        });
+      }
 
-      // 2. Уведомление о создании PaymentReceivable (если новый)
-      if (receivable && receivableIsNew) {
-        notificationService.sendPaymentReceivableCreated(receivable, load)
-          .catch(error => {
-            console.error('[LoadController] Failed to send payment receivable created notification:', error);
+      const {
+        page = 1,
+        limit: requestedLimit = 20,
+        sortBy = "createdAt",
+        sortOrder = "desc",
+        search,
+        ...filters
+      } = req.query;
+
+      const limit = Math.min(parseInt(requestedLimit), 100);
+
+      if (accessFilterResult.partnerOnly) {
+        const orderId = typeof search === 'string' ? search.trim() : '';
+        if (!orderId) {
+          return res.status(403).json({
+            success: false,
+            error: "Access denied"
           });
+        }
+        const result = await getLoadsWithPagination(
+          this.model,
+          { orderId },
+          this.populateFields,
+          null,
+          page,
+          limit,
+          { createdAt: -1 }
+        );
+        const data = result.data.map((load) => formatPartnerLoad(load));
+        return res.status(200).json({
+          success: true,
+          data,
+          pagination: result.pagination
+        });
       }
 
-      // 3. Уведомление о создании PaymentPayable (если новый)
-      if (payable && payableIsNew) {
-        notificationService.sendPaymentPayableCreated(payable, load)
-          .catch(error => {
-            console.error('[LoadController] Failed to send payment payable created notification:', error);
-          });
-      }
+      const filterParams = { ...filters };
+      delete filterParams.page;
+      delete filterParams.limit;
+      delete filterParams.sortBy;
+      delete filterParams.sortOrder;
+      delete filterParams.search;
 
-    } catch (error) {
-      // Логируем ошибку, но не прерываем основной процесс
-      console.error(`[LoadController] Error creating payment records for load ${load._id}:`, error);
-    }
-  }
+      const baseFilter = this.buildFilter(filterParams, search);
+      const filter = mergeFilters(accessFilterResult.filter, baseFilter);
+      const sort = this.buildSort(sortBy, sortOrder);
 
-  // Оптимизированная генерация orderId
-  generateOrderId = async () => {
-    const baseTimestamp = Math.floor(Date.now() / 1000);
-    const random = Math.floor(Math.random() * 9000) + 1000; // 4-значное случайное число
-    let orderId = `${baseTimestamp}${random}`;
-    
-    // Проверяем уникальность (максимум 3 попытки)
-    let attempts = 0;
-    const maxAttempts = 3;
-    
-    while (attempts < maxAttempts) {
-      const existing = await this.model.findOne({ orderId }).select('_id').lean();
-      if (!existing) {
-        return orderId;
-      }
-      // Генерируем новый с небольшим изменением
-      orderId = `${baseTimestamp}${Math.floor(Math.random() * 9000) + 1000}`;
-      attempts++;
-    }
-    
-    // Fallback: используем timestamp + случайное число
-    return `${Date.now()}${Math.floor(Math.random() * 10000)}`;
-  };
+      // Execute find and countDocuments in parallel for better performance
+      const [docs, total] = await Promise.all([
+        this.model
+          .find(filter)
+          .populate(this.populateFields)
+          .sort(sort)
+          .skip((page - 1) * limit)
+          .limit(parseInt(limit))
+          .lean(),
+        this.model.countDocuments(filter),
+      ]);
 
-
-  // Специфичные методы для Load
-  getByStatus = async (req, res) => {
-    try {
-      const { status } = req.params;
-      const { page = 1, limit = 10 } = req.query;
-
-      const loads = await this.model
-        .find({ status })
-        .populate(this.populateFields)
-        .sort({ createdAt: -1 }) 
-        .skip((page - 1) * limit)
-        .limit(parseInt(limit));
-
-      const total = await this.model.countDocuments({ status });
-
-      const formattedLoads = this.dto ? loads.map(load => this.dto.format(load)) : loads;
+      let formattedDocs = this.dto
+        ? docs.map((doc) => this.dto.format(doc))
+        : docs;
+      
+      // Add signed URLs to all loads
+      formattedDocs = await Promise.all(
+        formattedDocs.map((load) => addSignedUrlsToLoad(load))
+      );
+      formattedDocs = formattedDocs.map((load) => maybeStripPaymentFields(accessContext.role, load));
+      formattedDocs = formattedDocs.map((load) => maybeStripPaymentFields(accessContext.role, load));
 
       res.status(200).json({
         success: true,
-        data: formattedLoads,
+        data: formattedDocs,
+        pagination: {
+          total,
+          totalPages: Math.ceil(total / limit),
+          currentPage: parseInt(page),
+          limit: parseInt(limit),
+        },
+      });
+    } catch (error) {
+      this.handleError(res, error, "Failed to fetch loads");
+    }
+  };
+
+  search = async (req, res) => {
+    try {
+      const accessContext = await resolveAccessContext(req);
+      if (accessContext.error) {
+        return res.status(accessContext.error.status).json({
+          success: false,
+          error: accessContext.error.error
+        });
+      }
+      const accessFilterResult = await getAccessFilter(accessContext);
+      if (accessFilterResult.error) {
+        return res.status(accessFilterResult.error.status).json({
+          success: false,
+          error: accessFilterResult.error.error
+        });
+      }
+
+      const {
+        q: searchTerm,
+        page = 1,
+        limit = 10,
+        sortBy = 'createdAt',
+        sortOrder = 'desc',
+        ...filters
+      } = req.query;
+
+      if (accessFilterResult.partnerOnly) {
+        const orderId = typeof searchTerm === 'string' ? searchTerm.trim() : '';
+        if (!orderId) {
+          return res.status(403).json({
+            success: false,
+            error: "Access denied"
+          });
+        }
+        const result = await getLoadsWithPagination(
+          this.model,
+          { orderId },
+          this.populateFields,
+          null,
+          page,
+          limit,
+          { createdAt: -1 }
+        );
+        const data = result.data.map((load) => formatPartnerLoad(load));
+        return res.status(200).json({
+          success: true,
+          data,
+          pagination: result.pagination
+        });
+      }
+
+      let baseFilter = this.buildSearchFilter(filters, searchTerm);
+      const trimmedSearch = typeof searchTerm === 'string' ? searchTerm.trim() : '';
+      if (trimmedSearch) {
+        const searchRegex = { $regex: trimmedSearch, $options: 'i' };
+        const [customerIds, carrierIds, userIds] = await Promise.all([
+          Customer.find({ companyName: searchRegex }).distinct('_id').lean(),
+          Carrier.find({
+            $or: [
+              { companyName: searchRegex },
+              { mcNumber: searchRegex },
+              { email: searchRegex },
+              { phoneNumber: searchRegex },
+              { 'people.email': searchRegex },
+              { 'people.phoneNumber': searchRegex },
+              { 'people.fullName': searchRegex },
+            ]
+          }).distinct('_id').lean(),
+          User.find({
+            $or: [
+              { firstName: searchRegex },
+              { lastName: searchRegex },
+              { email: searchRegex },
+              { companyName: searchRegex }
+            ]
+          }).distinct('_id').lean(),
+        ]);
+        const refConditions = [];
+        if (customerIds.length > 0) refConditions.push({ customer: { $in: customerIds } });
+        if (carrierIds.length > 0) refConditions.push({ carrier: { $in: carrierIds } });
+        if (userIds.length > 0) refConditions.push({ createdBy: { $in: userIds } });
+        if (refConditions.length > 0) {
+          const directOr = baseFilter.$or || [];
+          baseFilter = { ...baseFilter, $or: [...directOr, ...refConditions] };
+        }
+      }
+      const filter = mergeFilters(accessFilterResult.filter, baseFilter);
+      const sort = this.buildSort(sortBy, sortOrder);
+
+      const docs = await this.model
+        .find(filter)
+        .populate(this.populateFields)
+        .sort(sort)
+        .skip((page - 1) * limit)
+        .limit(parseInt(limit))
+        .lean();
+
+      const total = await this.model.countDocuments(filter);
+
+      let formattedDocs = this.dto ? docs.map((doc) => this.dto.format(doc)) : docs;
+      formattedDocs = await Promise.all(
+        formattedDocs.map((load) => addSignedUrlsToLoad(load))
+      );
+
+      res.status(200).json({
+        success: true,
+        data: formattedDocs,
         pagination: {
           total,
           totalPages: Math.ceil(total / limit),
@@ -580,448 +831,1772 @@ class LoadController extends UniversalBaseController {
         }
       });
     } catch (error) {
-      this.handleError(res, error, 'Failed to fetch loads by status');
+      this.handleError(res, error, 'Failed to search loads');
+    }
+  };
+
+  getById = async (req, res) => {
+    try {
+      const { id } = req.params;
+
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        return res.status(400).json({
+          success: false,
+          error: "Invalid ID format",
+        });
+      }
+
+      const accessContext = await resolveAccessContext(req);
+      if (accessContext.error) {
+        return res.status(accessContext.error.status).json({
+          success: false,
+          error: accessContext.error.error
+        });
+      }
+      if (accessContext.role === 'partner') {
+        return res.status(403).json({
+          success: false,
+          error: "Access denied"
+        });
+      }
+
+      const doc = await this.model.findById(id).populate(this.populateFields).lean();
+
+      if (!doc) {
+        return res.status(404).json({
+          success: false,
+          error: "Load not found",
+        });
+      }
+
+      const canRead = await hasLoadReadAccess(accessContext, doc);
+      if (!canRead) {
+        return res.status(403).json({
+          success: false,
+          error: "Access denied"
+        });
+      }
+
+      let formattedDoc = this.dto ? this.dto.format(doc) : doc;
+      formattedDoc = await addSignedUrlsToLoad(formattedDoc);
+      formattedDoc = maybeStripPaymentFields(accessContext.role, formattedDoc);
+
+      res.status(200).json({
+        success: true,
+        data: formattedDoc,
+      });
+    } catch (error) {
+      this.handleError(res, error, "Failed to fetch load");
+    }
+  };
+
+  generateOrderId = async () => {
+    const baseTimestamp = Math.floor(Date.now() / 1000);
+    const random = Math.floor(Math.random() * 9000) + 1000;
+    let orderId = `${baseTimestamp}${random}`;
+
+    let attempts = 0;
+    const maxAttempts = 3;
+
+    while (attempts < maxAttempts) {
+      const existing = await this.model
+        .findOne({ orderId })
+        .select("_id")
+        .lean();
+      if (!existing) {
+        return orderId;
+      }
+      orderId = `${baseTimestamp}${Math.floor(Math.random() * 9000) + 1000}`;
+      attempts++;
+    }
+
+    return `${Date.now()}${Math.floor(Math.random() * 10000)}`;
+  };
+
+  async createPaymentsOnDelivered(load, userId, session = null, options = {}) {
+    const skipPayable = options?.skipPayable === true;
+    const loadId = load._id?.toString() || load.id?.toString() || 'unknown';
+    const orderId = load.orderId || loadId;
+    
+    // ============================================
+    // ЭТАП 1: ВАЛИДАЦИЯ И ПОДГОТОВКА ДАННЫХ (ВНЕ ТРАНЗАКЦИИ)
+    // ============================================
+    try {
+      // ВАЛИДАЦИЯ: Проверяем обязательные поля
+      const validationErrors = [];
+      
+      if (!load.customer) {
+        validationErrors.push("Customer is required to create payments");
+      }
+      
+      const customerRate = parseFloat(load.customerRate) || 0;
+      if (!load.customerRate || customerRate <= 0) {
+        validationErrors.push("Customer rate is required and must be greater than 0");
+      }
+      
+      if (!skipPayable) {
+      if (!load.carrier) {
+        validationErrors.push("Carrier is required to create payments");
+      }
+      
+      const carrierRate = parseFloat(load.carrierRate) || 0;
+      if (!load.carrierRate || carrierRate <= 0) {
+        validationErrors.push("Carrier rate is required and must be greater than 0");
+        }
+      }
+      
+      if (validationErrors.length > 0) {
+        throw new Error(`Cannot create payments: ${validationErrors.join('; ')}`);
+      }
+
+      // ПОДГОТОВКА ДАННЫХ: Загружаем справочные данные ДО транзакции
+      
+      // Загружаем Customer для получения paymentTerms
+      let customerData = null;
+      if (load.customer) {
+        try {
+          const Customer = require('../models/Customer');
+          customerData = await Customer.findById(load.customer).lean();
+        } catch (error) {
+          console.warn(`[LoadController] Warning: Could not load Customer data (non-critical):`, error.message);
+        }
+      }
+      
+      // Загружаем Carrier ДО транзакции (read-only операция)
+      let carrierData = null;
+      if (!skipPayable && load.carrier) {
+        try {
+          carrierData = await Carrier.findById(load.carrier).lean();
+        } catch (error) {
+          console.warn(`[LoadController] Warning: Could not load Carrier data (non-critical):`, error.message);
+          // Continue without carrier data - bank details will be null
+        }
+      }
+
+      const paymentMethod = load.paymentMethod || customerData?.paymentMethod || null;
+
+      // Парсим paymentTerms для получения deadlineDays
+      // Receivable.deadlineDays = Customer.paymentTerms (fallback на 30)
+      // Payable.deadlineDays = Load.paymentTerms (fallback на 30)
+      function parseDeadlineDays(paymentTerms) {
+        if (!paymentTerms) return 30;
+        if (typeof paymentTerms === 'number') return paymentTerms;
+        if (typeof paymentTerms === 'string') {
+          const trimmed = paymentTerms.trim();
+          const match = trimmed.match(/\d+/);
+          if (match) {
+            return parseInt(match[0], 10);
+          }
+        }
+        return 30;
+      }
+
+      const receivableDeadlineDays = parseDeadlineDays(customerData?.paymentTerms);
+      const payableDeadlineDays = parseDeadlineDays(load.paymentTerms);
+
+      // Рассчитываем суммы для PaymentReceivable
+      const baseCustomerRate = parseFloat(load.customerRate) || 0;
+      
+      // Обрабатываем fees для customer (доплаты от customer)
+      const customerFees = Array.isArray(load.fees) 
+        ? load.fees.map(fee => ({
+            type: fee.type,
+            customerRate: parseFloat(fee.customerRate) || 0,
+            total: parseFloat(fee.total) || 0
+          }))
+        : [];
+      const feesCustomerTotal = customerFees.reduce((sum, fee) => sum + fee.customerRate, 0);
+      
+      // Обрабатываем TONU для customer
+      const tonuCustomerRate = (load.tonu?.enabled && load.tonu?.customerRate) 
+        ? parseFloat(load.tonu.customerRate) || 0 
+        : 0;
+      
+      const totalCustomerAmount = baseCustomerRate + feesCustomerTotal + tonuCustomerRate;
+
+      let baseCarrierRate = 0;
+      let carrierFees = [];
+      let feesCarrierTotal = 0;
+      let tonuCarrierRate = 0;
+      let totalCarrierAmount = 0;
+      if (!skipPayable) {
+      // Рассчитываем суммы для PaymentPayable
+        baseCarrierRate = parseFloat(load.carrierRate) || 0;
+      
+      // Обрабатываем fees для carrier (доплаты от customer, которые мы платим carrier)
+        carrierFees = Array.isArray(load.fees) 
+        ? load.fees.map(fee => ({
+            type: fee.type,
+            carrierRate: parseFloat(fee.carrierRate) || 0,
+            total: parseFloat(fee.total) || 0
+          }))
+        : [];
+        feesCarrierTotal = carrierFees.reduce((sum, fee) => sum + fee.carrierRate, 0);
+      
+      // Обрабатываем TONU для carrier (доплата от customer, которую мы платим carrier)
+        tonuCarrierRate = (load.tonu?.enabled && load.tonu?.carrierRate) 
+        ? parseFloat(load.tonu.carrierRate) || 0 
+        : 0;
+      
+        totalCarrierAmount = baseCarrierRate + feesCarrierTotal + tonuCarrierRate;
+      }
+
+      // Подготавливаем данные для PaymentReceivable
+      const receivableData = {
+        loadId: load._id || load.id, // Устанавливаем loadId для связи с Load
+        orderId: load.orderId, // Order ID из Load
+        customer: load.customer,
+        customerRate: baseCustomerRate, // Базовая ставка
+        totalAmount: totalCustomerAmount, // Полная сумма (customerRate + fees + tonu)
+        fees: customerFees, // Детали fees от customer
+        tonu: {
+          enabled: load.tonu?.enabled || false,
+          customerRate: tonuCustomerRate
+        },
+        deadlineDays: receivableDeadlineDays,
+        status: "pending",
+        paymentMethod: paymentMethod || null,
+        createdBy: userId || null,
+      };
+
+      let payableData = null;
+      if (!skipPayable) {
+      // Подготавливаем данные для PaymentPayable
+        payableData = {
+          loadId: load._id || load.id, // Устанавливаем loadId для связи с Load
+          orderId: load.orderId, // Order ID из Load
+          carrier: load.carrier,
+          carrierRate: baseCarrierRate, // Базовая ставка
+          totalAmount: totalCarrierAmount, // Полная сумма (carrierRate + fees + tonu)
+          fees: carrierFees, // Детали fees от customer (которые мы платим carrier)
+          tonu: {
+            enabled: load.tonu?.enabled || false,
+            carrierRate: tonuCarrierRate
+          },
+          deadlineDays: payableDeadlineDays,
+          paymentMethod: paymentMethod || null,
+          createdBy: userId || null,
+        };
+      }
+
+      // Копируем банковские реквизиты из Carrier (если загружен)
+      if (!skipPayable && carrierData) {
+        payableData.bank = carrierData.bankAccount || null;
+        payableData.routing = carrierData.routing || null;
+        payableData.accountNumber = carrierData.accountNumber || null;
+      }
+
+      // ============================================
+      // ЭТАП 2: ОПЕРАЦИИ В ТРАНЗАКЦИИ (только запись)
+      // ============================================
+      
+      let receivable = null;
+      let payable = null;
+      let createdReceivable = false;
+      let createdPayable = false;
+
+      // Проверяем, есть ли уже PaymentReceivable в Load
+      if (load.paymentReceivable) {
+        try {
+          const query = PaymentReceivable.findById(load.paymentReceivable);
+          if (session) query.session(session);
+          receivable = await query;
+        } catch (error) {
+          if (error.code === 251 || error.codeName === 'NoSuchTransaction') {
+            throw error;
+          }
+          console.warn(`[LoadController] Could not load existing PaymentReceivable, will create new:`, error.message);
+          receivable = null;
+        }
+      }
+      
+      // Создаем новый PaymentReceivable, если не найден существующий
+      if (!receivable) {
+        try {
+          receivable = new PaymentReceivable(receivableData);
+          if (session) receivable.$session(session);
+          await receivable.save();
+          createdReceivable = true;
+        } catch (error) {
+          console.error(`[LoadController] Failed to create PaymentReceivable:`, error.message);
+          throw new Error(`Failed to create PaymentReceivable: ${error.message}`);
+        }
+      }
+
+      if (!skipPayable) {
+      // Проверяем, есть ли уже PaymentPayable в Load
+      if (load.paymentPayable) {
+        try {
+          const query = PaymentPayable.findById(load.paymentPayable);
+          if (session) query.session(session);
+          payable = await query;
+        } catch (error) {
+          if (error.code === 251 || error.codeName === 'NoSuchTransaction') {
+            throw error;
+          }
+          console.warn(`[LoadController] Could not load existing PaymentPayable, will create new:`, error.message);
+          payable = null;
+        }
+      }
+      
+      // Создаем новый PaymentPayable, если не найден существующий
+      if (!payable) {
+        try {
+          payable = new PaymentPayable(payableData);
+          if (session) payable.$session(session);
+          await payable.save();
+          createdPayable = true;
+        } catch (error) {
+          console.error(`[LoadController] Failed to create PaymentPayable:`, error.message);
+          throw new Error(`Failed to create PaymentPayable: ${error.message}`);
+          }
+        }
+      }
+
+      // КРИТИЧЕСКАЯ ПРОВЕРКА: Оба платежа должны быть созданы успешно
+      if (!receivable) {
+        throw new Error('Failed to create PaymentReceivable. PaymentReceivable is required for Delivered status.');
+      }
+      
+      if (!skipPayable && !payable) {
+        throw new Error('Failed to create PaymentPayable. PaymentPayable is required for Delivered status.');
+      }
+
+      const updateData = {
+        paymentReceivable: receivable._id
+      };
+      if (payable) {
+        updateData.paymentPayable = payable._id;
+      }
+
+      const updateOptions = session ? { session, new: true, runValidators: true } : { new: true, runValidators: true };
+      await Load.findByIdAndUpdate(load._id, updateData, updateOptions);
+      
+      // Отправляем уведомления о создании платежей
+      // Загружаем полные данные для уведомлений (populate customer и carrier)
+      try {
+        const receivableQuery = PaymentReceivable.findById(receivable._id)
+          .populate('customer');
+        const payableQuery = payable
+          ? PaymentPayable.findById(payable._id).populate('carrier')
+          : null;
+
+        if (session) {
+          receivableQuery.session(session);
+          if (payableQuery) {
+          payableQuery.session(session);
+          }
+        }
+
+        const receivablePopulated = (await receivableQuery.lean()) || (receivable?.toObject ? receivable.toObject() : receivable);
+        const payablePopulated = payableQuery
+          ? (await payableQuery.lean()) || (payable?.toObject ? payable.toObject() : payable)
+          : null;
+
+        if (!receivablePopulated || (!skipPayable && !payablePopulated)) {
+          console.warn(
+            `[LoadController] ⚠️ Payment populate returned null (receivable: ${!!receivablePopulated}, payable: ${!!payablePopulated})`
+          );
+        }
+
+        // Получаем actor из userId (если передан)
+        let actor = null;
+        if (userId) {
+          try {
+            const User = require('../models/User');
+            const user = await User.findById(userId).lean();
+            if (user) {
+              actor = {
+                id: user._id.toString(),
+                role: user.role || 'user',
+                email: user.email || null
+              };
+            }
+          } catch (err) {
+            console.warn('[LoadController] Could not load user for notification actor:', err.message);
+          }
+        }
+
+        // Отправляем уведомление о создании PaymentReceivable
+        if (receivablePopulated) {
+          const customerId = receivablePopulated.customer?._id?.toString() || 
+                            receivablePopulated.customer?.toString() || 
+                            receivablePopulated.customer;
+          
+          const receivableEventResult = await notificationClient.sendCreatedEvent(
+            'payment',
+            {
+              ...receivablePopulated,
+              type: 'receivable',
+              orderId: receivablePopulated.orderId || load.orderId,
+              customer: customerId
+            },
+            actor || { id: null, role: 'system', email: null },
+            {
+              includeEntityData: true,
+              targets: {
+                customerId: customerId,
+                admin: true
+              }
+            }
+          );
+
+          if (!receivableEventResult?.success) {
+            try {
+              const User = require('../models/User');
+              const adminUsers = await User.find({ role: 'admin' }).select('_id').lean();
+              const recipients = adminUsers.map(u => u._id?.toString()).filter(Boolean);
+              if (recipients.length > 0) {
+                await notificationService.sendNotification({
+                  type: 'payment.created',
+                  title: `Payment Receivable Created: ${receivablePopulated.orderId || load.orderId}`,
+                  message: `Payment Receivable for order ${receivablePopulated.orderId || load.orderId} was created`,
+                  recipients,
+                  data: {
+                    paymentId: receivablePopulated._id?.toString() || receivablePopulated.id,
+                    paymentType: 'receivable',
+                    orderId: receivablePopulated.orderId || load.orderId,
+                    loadId: load._id?.toString() || load.id,
+                    customerId: customerId,
+                    customer: receivablePopulated.customer,
+                    amount: receivablePopulated.totalAmount || receivablePopulated.customerRate,
+                    customerRate: receivablePopulated.customerRate,
+                    load: {
+                      id: load._id?.toString() || load.id,
+                      orderId: load.orderId,
+                      status: load.status
+                    }
+                  },
+                  priority: 'high'
+                });
+              }
+            } catch (fallbackError) {
+              console.warn('[LoadController] ❌ Fallback payment receivable notification failed:', fallbackError.message);
+            }
+          }
+        }
+
+        // Отправляем уведомление о создании PaymentPayable
+        if (payablePopulated) {
+          const carrierId = payablePopulated.carrier?._id?.toString() || 
+                          payablePopulated.carrier?.toString() || 
+                          payablePopulated.carrier;
+          
+          const payableEventResult = await notificationClient.sendCreatedEvent(
+            'payment',
+            {
+              ...payablePopulated,
+              type: 'payable',
+              orderId: payablePopulated.orderId || load.orderId,
+              carrier: carrierId
+            },
+            actor || { id: null, role: 'system', email: null },
+            {
+              includeEntityData: true,
+              targets: {
+                carrierId: carrierId,
+                admin: true
+              }
+            }
+          );
+
+          if (!payableEventResult?.success) {
+            try {
+              const User = require('../models/User');
+              const adminUsers = await User.find({ role: 'admin' }).select('_id').lean();
+              const recipients = adminUsers.map(u => u._id?.toString()).filter(Boolean);
+              if (recipients.length > 0) {
+                await notificationService.sendNotification({
+                  type: 'payment.created',
+                  title: `Payment Payable Created: ${payablePopulated.orderId || load.orderId}`,
+                  message: `Payment Payable for order ${payablePopulated.orderId || load.orderId} was created`,
+                  recipients,
+                  data: {
+                    paymentId: payablePopulated._id?.toString() || payablePopulated.id,
+                    paymentType: 'payable',
+                    orderId: payablePopulated.orderId || load.orderId,
+                    loadId: load._id?.toString() || load.id,
+                    carrierId: carrierId,
+                    carrier: payablePopulated.carrier,
+                    amount: payablePopulated.totalAmount || payablePopulated.carrierRate,
+                    carrierRate: payablePopulated.carrierRate,
+                    load: {
+                      id: load._id?.toString() || load.id,
+                      orderId: load.orderId,
+                      status: load.status
+                    }
+                  },
+                  priority: 'high'
+                });
+              }
+            } catch (fallbackError) {
+              console.warn('[LoadController] ❌ Fallback payment payable notification failed:', fallbackError.message);
+            }
+          }
+        }
+      } catch (notificationError) {
+        // Не прерываем выполнение, если уведомления не отправились
+        console.error(`[LoadController] ⚠️ Failed to send payment creation notifications:`, notificationError.message);
+      }
+      
+      // Return payment IDs so they can be used by the caller if needed
+      return {
+        receivableId: receivable._id,
+        payableId: payable._id || null,
+        receivable,
+        payable
+      };
+    } catch (error) {
+      console.error(
+        `[LoadController] ❌ Error creating payments for load ${orderId}:`,
+        error.message,
+        `Code: ${error.code}, CodeName: ${error.codeName}`,
+        error.stack
+      );
+      // Пробрасываем ошибку дальше, чтобы транзакция откатилась
+      throw error;
+    }
+  }
+
+  async createReceivableOnPickedUpForPlatform(load, userId, session = null) {
+    const loadId = load._id?.toString() || load.id?.toString() || 'unknown';
+    const orderId = load.orderId || loadId;
+
+    if (load.paymentReceivable) {
+      return { skipped: true, reason: 'existing_receivable' };
+    }
+
+    const existingReceivable = await PaymentReceivable.findOne({ loadId: load._id }).lean();
+    if (existingReceivable) {
+      return { skipped: true, reason: 'existing_receivable_db' };
+    }
+
+    const customerId = load.customer?._id || load.customer;
+    if (!customerId) {
+      console.warn(`[LoadController] Missing customer for load ${orderId}, cannot create receivable.`);
+      return { skipped: true, reason: 'missing_customer' };
+    }
+
+    const customerRate = parseFloat(load.customerRate) || 0;
+    if (!load.customerRate || customerRate <= 0) {
+      console.warn(`[LoadController] Missing/invalid customerRate for load ${orderId}, creating receivable with 0 rate.`);
+    }
+
+    let customerData = null;
+    try {
+      customerData = await Customer.findById(customerId).lean();
+    } catch (error) {
+      console.warn(`[LoadController] Could not load Customer data (non-critical):`, error.message);
+    }
+
+    function parseDeadlineDays(paymentTerms) {
+      if (!paymentTerms) return 30;
+      if (typeof paymentTerms === 'number') return paymentTerms;
+      if (typeof paymentTerms === 'string') {
+        const trimmed = paymentTerms.trim();
+        const match = trimmed.match(/\d+/);
+        if (match) {
+          return parseInt(match[0], 10);
+        }
+      }
+      return 30;
+    }
+
+    const deadlineDays = parseDeadlineDays(customerData?.paymentTerms);
+
+    const paymentMethod = load.paymentMethod || customerData?.paymentMethod || null;
+
+    const baseCustomerRate = customerRate;
+    const customerFees = Array.isArray(load.fees)
+      ? load.fees.map(fee => ({
+          type: fee.type,
+          customerRate: parseFloat(fee.customerRate) || 0,
+          total: parseFloat(fee.total) || 0
+        }))
+      : [];
+    const feesCustomerTotal = customerFees.reduce((sum, fee) => sum + fee.customerRate, 0);
+    const tonuCustomerRate = (load.tonu?.enabled && load.tonu?.customerRate)
+      ? parseFloat(load.tonu.customerRate) || 0
+      : 0;
+    const totalCustomerAmount = baseCustomerRate + feesCustomerTotal + tonuCustomerRate;
+
+    const receivableData = {
+      loadId: load._id || load.id,
+      orderId: load.orderId,
+      customer: customerId,
+      customerRate: baseCustomerRate,
+      totalAmount: totalCustomerAmount,
+      fees: customerFees,
+      tonu: {
+        enabled: load.tonu?.enabled || false,
+        customerRate: tonuCustomerRate
+      },
+      deadlineDays,
+      status: "pending",
+      paymentMethod: paymentMethod || null,
+      createdBy: userId || null
+    };
+
+    let receivable;
+    try {
+      receivable = new PaymentReceivable(receivableData);
+      if (session) receivable.$session(session);
+      await receivable.save();
+    } catch (error) {
+      console.error(`[LoadController] Failed to create PaymentReceivable:`, error.message);
+      return { skipped: true, reason: 'create_failed', error: error.message };
+    }
+
+    const updateOptions = session ? { session, new: true, runValidators: true } : { new: true, runValidators: true };
+    await Load.findByIdAndUpdate(load._id, { paymentReceivable: receivable._id }, updateOptions);
+
+    // Send notification about receivable creation
+    try {
+      let actor = null;
+      if (userId) {
+        try {
+          const User = require('../models/User');
+          const user = await User.findById(userId).lean();
+          if (user) {
+            actor = {
+              id: user._id.toString(),
+              role: user.role || 'user',
+              email: user.email || null
+            };
+          }
+        } catch (err) {
+          console.warn('[LoadController] Could not load user for notification actor:', err.message);
+        }
+      }
+
+      const receivablePopulated = await PaymentReceivable.findById(receivable._id)
+        .populate('customer')
+        .lean();
+      const customerId = receivablePopulated?.customer?._id?.toString() ||
+        receivablePopulated?.customer?.toString() ||
+        receivablePopulated?.customer;
+
+      await notificationClient.sendCreatedEvent(
+        'payment',
+        {
+          ...(receivablePopulated || receivable.toObject()),
+          type: 'receivable',
+          orderId: receivablePopulated?.orderId || load.orderId,
+          customer: customerId
+        },
+        actor || { id: null, role: 'system', email: null },
+        {
+          includeEntityData: true,
+          targets: {
+            customerId: customerId,
+            admin: true
+          }
+        }
+      );
+    } catch (error) {
+      console.error(`[LoadController] Failed to send receivable notification:`, error.message);
+    }
+
+    return { success: true, receivableId: receivable._id };
+  }
+
+  async shouldSkipPayableForPlatformDelivered(load) {
+    try {
+      let customerType = load.customer?.type;
+      if (!customerType && load.customer) {
+        const customerDoc = await Customer.findById(load.customer).select('type').lean();
+        customerType = customerDoc?.type;
+      }
+
+      if (customerType !== 'platform') {
+        return false;
+      }
+
+      let receivableStatus = load.paymentReceivable?.status;
+      let receivableId = load.paymentReceivable?._id || load.paymentReceivable;
+      if (!receivableStatus && receivableId) {
+        const receivableDoc = await PaymentReceivable.findById(receivableId).select('status').lean();
+        receivableStatus = receivableDoc?.status;
+      }
+
+      return receivableStatus === 'partially received';
+    } catch (error) {
+      console.warn('[LoadController] Failed to evaluate payable skip condition:', error.message);
+      return false;
+    }
+  }
+
+  /**
+   * Создает PaymentReceivable и PaymentPayable для отмененного Load с TONU
+   * Использует TONU суммы вместо обычных customerRate и carrierRate
+   */
+  async createPaymentsOnCancelled(load, userId, session = null, options = {}) {
+    const skipPayable = options?.skipPayable === true;
+    const loadId = load._id?.toString() || load.id?.toString() || 'unknown';
+    const orderId = load.orderId || loadId;
+    
+    // ============================================
+    // ЭТАП 1: ВАЛИДАЦИЯ И ПОДГОТОВКА ДАННЫХ (ВНЕ ТРАНЗАКЦИИ)
+    // ============================================
+    try {
+      // ВАЛИДАЦИЯ: Проверяем обязательные поля для TONU
+      const validationErrors = [];
+      
+      if (!load.customer) {
+        validationErrors.push("Customer is required to create TONU payments");
+      }
+      
+      if (!load.tonu || !load.tonu.enabled) {
+        validationErrors.push("TONU must be enabled to create payments for cancelled load");
+      }
+      
+      const tonuCustomerRate = parseFloat(load.tonu?.customerRate) || 0;
+      if (!load.tonu?.customerRate || tonuCustomerRate <= 0) {
+        validationErrors.push("TONU customer rate is required and must be greater than 0");
+      }
+      
+      if (!skipPayable) {
+        if (!load.carrier) {
+          validationErrors.push("Carrier is required to create TONU payments");
+        }
+        
+        const tonuCarrierRate = parseFloat(load.tonu?.carrierRate) || 0;
+        if (!load.tonu?.carrierRate || tonuCarrierRate <= 0) {
+          validationErrors.push("TONU carrier rate is required and must be greater than 0");
+        }
+      }
+      
+      if (validationErrors.length > 0) {
+        throw new Error(`Cannot create TONU payments: ${validationErrors.join('; ')}`);
+      }
+
+      // ПОДГОТОВКА ДАННЫХ: Загружаем справочные данные ДО транзакции
+      
+      // Загружаем Customer для получения paymentTerms
+      let customerData = null;
+      if (load.customer) {
+        try {
+          const Customer = require('../models/Customer');
+          customerData = await Customer.findById(load.customer).lean();
+        } catch (error) {
+          console.warn(`[LoadController] Warning: Could not load Customer data (non-critical):`, error.message);
+        }
+      }
+      
+      // Загружаем Carrier ДО транзакции (read-only операция)
+      let carrierData = null;
+      if (!skipPayable && load.carrier) {
+        try {
+          carrierData = await Carrier.findById(load.carrier).lean();
+        } catch (error) {
+          console.warn(`[LoadController] Warning: Could not load Carrier data (non-critical):`, error.message);
+        }
+      }
+
+      function parseDeadlineDays(paymentTerms) {
+        if (!paymentTerms) return 30;
+        if (typeof paymentTerms === 'number') return paymentTerms;
+        if (typeof paymentTerms === 'string') {
+          const trimmed = paymentTerms.trim();
+          const match = trimmed.match(/\d+/);
+          if (match) {
+            return parseInt(match[0], 10);
+          }
+        }
+        return 30;
+      }
+
+      const receivableDeadlineDays = parseDeadlineDays(customerData?.paymentTerms);
+      const payableDeadlineDays = parseDeadlineDays(load.paymentTerms);
+
+      const paymentMethod = load.paymentMethod || customerData?.paymentMethod || null;
+
+      const tonuCustomerRateValue = parseFloat(load.tonu.customerRate) || 0;
+      const tonuCarrierRateValue = skipPayable ? 0 : (parseFloat(load.tonu.carrierRate) || 0);
+
+      // Подготавливаем данные для PaymentReceivable (только TONU сумма)
+      const receivableData = {
+        loadId: load._id || load.id,
+        orderId: load.orderId,
+        customer: load.customer,
+        customerRate: tonuCustomerRateValue, // Используем TONU customer rate
+        totalAmount: tonuCustomerRateValue, // Total amount = только TONU customer rate
+        fees: [], // Нет fees для TONU
+        tonu: {
+          enabled: true,
+          customerRate: tonuCustomerRateValue
+        },
+        deadlineDays: receivableDeadlineDays,
+        status: "pending",
+        paymentMethod: paymentMethod || null,
+      };
+
+      let payableData = null;
+      if (!skipPayable) {
+        // Подготавливаем данные для PaymentPayable (только TONU сумма)
+        payableData = {
+          loadId: load._id || load.id,
+          orderId: load.orderId,
+          carrier: load.carrier,
+          carrierRate: tonuCarrierRateValue, // Используем TONU carrier rate
+          totalAmount: tonuCarrierRateValue, // Total amount = только TONU carrier rate
+          fees: [], // Нет fees для TONU
+          tonu: {
+            enabled: true,
+            carrierRate: tonuCarrierRateValue
+          },
+          deadlineDays: payableDeadlineDays,
+          paymentMethod: paymentMethod || null,
+        };
+      }
+
+      // Копируем банковские реквизиты из Carrier (если загружен)
+      if (!skipPayable && carrierData) {
+        payableData.bank = carrierData.bankAccount || null;
+        payableData.routing = carrierData.routing || null;
+        payableData.accountNumber = carrierData.accountNumber || null;
+      }
+
+      // ============================================
+      // ЭТАП 2: ОПЕРАЦИИ В ТРАНЗАКЦИИ (только запись)
+      // ============================================
+      
+      let receivable = null;
+      let payable = null;
+      let createdReceivable = false;
+      let createdPayable = false;
+
+      // Проверяем, есть ли уже PaymentReceivable в Load
+      if (load.paymentReceivable) {
+        try {
+          const query = PaymentReceivable.findById(load.paymentReceivable);
+          if (session) query.session(session);
+          receivable = await query;
+        } catch (error) {
+          if (error.code === 251 || error.codeName === 'NoSuchTransaction') {
+            throw error;
+          }
+          console.warn(`[LoadController] Could not load existing PaymentReceivable, will create new:`, error.message);
+          receivable = null;
+        }
+      }
+      
+      // Создаем новый PaymentReceivable, если не найден существующий
+      if (!receivable) {
+        try {
+          receivable = new PaymentReceivable(receivableData);
+          if (session) receivable.$session(session);
+          await receivable.save();
+          createdReceivable = true;
+        } catch (error) {
+          console.error(`[LoadController] Failed to create PaymentReceivable for TONU:`, error.message);
+          throw new Error(`Failed to create PaymentReceivable for TONU: ${error.message}`);
+        }
+      }
+
+      if (!skipPayable) {
+        // Проверяем, есть ли уже PaymentPayable в Load
+        if (load.paymentPayable) {
+          try {
+            const query = PaymentPayable.findById(load.paymentPayable);
+            if (session) query.session(session);
+            payable = await query;
+          } catch (error) {
+            if (error.code === 251 || error.codeName === 'NoSuchTransaction') {
+              throw error;
+            }
+            console.warn(`[LoadController] Could not load existing PaymentPayable, will create new:`, error.message);
+            payable = null;
+          }
+        }
+        
+        // Создаем новый PaymentPayable, если не найден существующий
+        if (!payable) {
+          try {
+            payable = new PaymentPayable(payableData);
+            if (session) payable.$session(session);
+            await payable.save();
+            createdPayable = true;
+          } catch (error) {
+            console.error(`[LoadController] Failed to create PaymentPayable for TONU:`, error.message);
+            throw new Error(`Failed to create PaymentPayable for TONU: ${error.message}`);
+          }
+        }
+      }
+
+      // КРИТИЧЕСКАЯ ПРОВЕРКА: Оба платежа должны быть созданы успешно
+      if (!receivable) {
+        throw new Error('Failed to create PaymentReceivable for TONU. PaymentReceivable is required for Cancelled status with TONU.');
+      }
+      
+      if (!skipPayable && !payable) {
+        throw new Error('Failed to create PaymentPayable for TONU. PaymentPayable is required for Cancelled status with TONU.');
+      }
+
+      const updateData = {
+        paymentReceivable: receivable._id
+      };
+      if (payable) {
+        updateData.paymentPayable = payable._id;
+      }
+
+      const updateOptions = session ? { session, new: true, runValidators: true } : { new: true, runValidators: true };
+      await Load.findByIdAndUpdate(load._id, updateData, updateOptions);
+      
+      // ============================================
+      // ЭТАП 3: УВЕДОМЛЕНИЯ (вне транзакции, не блокируем ответ)
+      // ============================================
+      
+      // Создаем actor для уведомлений
+      const actor = userId 
+        ? await (async () => {
+            try {
+              const User = require('../models/User');
+              const user = await User.findById(userId).select('_id role email').lean();
+              return user ? { id: user._id?.toString(), role: user.role || 'unknown', email: user.email || null } : { id: null, role: 'system', email: null };
+            } catch (error) {
+              return { id: userId?.toString() || null, role: 'unknown', email: null };
+            }
+          })()
+        : { id: null, role: 'system', email: null };
+
+      setImmediate(async () => {
+        try {
+          const notificationClient = require('../services/notificationClient');
+          const notificationService = require('../services/notificationService');
+          
+          // Загружаем populated данные для уведомлений
+          const receivableQuery = PaymentReceivable.findById(receivable._id)
+            .populate('customer', 'companyName email')
+            .populate('loadId', 'orderId status');
+          const receivablePopulated = await receivableQuery;
+          
+          const payableQuery = skipPayable || !payable 
+            ? null
+            : PaymentPayable.findById(payable._id)
+                .populate('carrier', 'companyName email')
+                .populate('loadId', 'orderId status');
+          const payablePopulated = payableQuery ? await payableQuery : null;
+
+          // Отправляем уведомление о создании PaymentReceivable для TONU
+          if (receivablePopulated) {
+            const customerId = receivablePopulated.customer?._id?.toString() || 
+                              receivablePopulated.customer?.toString() || 
+                              receivablePopulated.customer;
+            
+            const receivableEventResult = await notificationClient.sendCreatedEvent(
+              'payment',
+              {
+                ...receivablePopulated,
+                type: 'receivable',
+                orderId: receivablePopulated.orderId || load.orderId,
+                customer: customerId
+              },
+              actor,
+              {
+                includeEntityData: true,
+                targets: {
+                  customerId: customerId,
+                  admin: true
+                }
+              }
+            );
+
+            if (!receivableEventResult?.success) {
+              try {
+                const User = require('../models/User');
+                const adminUsers = await User.find({ role: 'admin' }).select('_id').lean();
+                const recipients = adminUsers.map(u => u._id?.toString()).filter(Boolean);
+                if (recipients.length > 0) {
+                  await notificationService.sendNotification({
+                    type: 'payment.created',
+                    title: `TONU Payment Receivable Created: ${receivablePopulated.orderId || load.orderId}`,
+                    message: `TONU Payment Receivable for cancelled order ${receivablePopulated.orderId || load.orderId} was created. Amount: $${receivablePopulated.totalAmount || tonuCustomerRateValue}`,
+                    recipients,
+                    data: {
+                      paymentId: receivablePopulated._id?.toString() || receivablePopulated.id,
+                      paymentType: 'receivable',
+                      orderId: receivablePopulated.orderId || load.orderId,
+                      loadId: load._id?.toString() || load.id,
+                      customerId: customerId,
+                      customer: receivablePopulated.customer,
+                      amount: receivablePopulated.totalAmount || tonuCustomerRateValue,
+                      customerRate: receivablePopulated.customerRate,
+                      load: {
+                        id: load._id?.toString() || load.id,
+                        orderId: load.orderId,
+                        status: load.status
+                      }
+                    },
+                    priority: 'high'
+                  });
+                }
+              } catch (fallbackError) {
+                console.warn('[LoadController] ❌ Fallback TONU payment receivable notification failed:', fallbackError.message);
+              }
+            }
+          }
+
+          // Отправляем уведомление о создании PaymentPayable для TONU
+          if (payablePopulated) {
+            const carrierId = payablePopulated.carrier?._id?.toString() || 
+                            payablePopulated.carrier?.toString() || 
+                            payablePopulated.carrier;
+            
+            const payableEventResult = await notificationClient.sendCreatedEvent(
+              'payment',
+              {
+                ...payablePopulated,
+                type: 'payable',
+                orderId: payablePopulated.orderId || load.orderId,
+                carrier: carrierId
+              },
+              actor,
+              {
+                includeEntityData: true,
+                targets: {
+                  carrierId: carrierId,
+                  admin: true
+                }
+              }
+            );
+
+            if (!payableEventResult?.success) {
+              try {
+                const User = require('../models/User');
+                const adminUsers = await User.find({ role: 'admin' }).select('_id').lean();
+                const recipients = adminUsers.map(u => u._id?.toString()).filter(Boolean);
+                if (recipients.length > 0) {
+                  await notificationService.sendNotification({
+                    type: 'payment.created',
+                    title: `TONU Payment Payable Created: ${payablePopulated.orderId || load.orderId}`,
+                    message: `TONU Payment Payable for cancelled order ${payablePopulated.orderId || load.orderId} was created. Amount: $${payablePopulated.totalAmount || tonuCarrierRateValue}`,
+                    recipients,
+                    data: {
+                      paymentId: payablePopulated._id?.toString() || payablePopulated.id,
+                      paymentType: 'payable',
+                      orderId: payablePopulated.orderId || load.orderId,
+                      loadId: load._id?.toString() || load.id,
+                      carrierId: carrierId,
+                      carrier: payablePopulated.carrier,
+                      amount: payablePopulated.totalAmount || tonuCarrierRateValue,
+                      carrierRate: payablePopulated.carrierRate,
+                      load: {
+                        id: load._id?.toString() || load.id,
+                        orderId: load.orderId,
+                        status: load.status
+                      }
+                    },
+                    priority: 'high'
+                  });
+                }
+              } catch (fallbackError) {
+                console.warn('[LoadController] ❌ Fallback TONU payment payable notification failed:', fallbackError.message);
+              }
+            }
+          }
+        } catch (notificationError) {
+          // Не прерываем выполнение, если уведомления не отправились
+          console.error(`[LoadController] ⚠️ Failed to send TONU payment creation notifications:`, notificationError.message);
+        }
+      });
+
+      return {
+        receivable,
+        payable,
+        createdReceivable,
+        createdPayable
+      };
+    } catch (error) {
+      console.error(`[LoadController] Error in createPaymentsOnCancelled:`, error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * Синхронизирует PaymentReceivable и PaymentPayable с данными из Load
+   * Вызывается при обновлении Load, если платежи уже созданы
+   * @param {Object} load - Обновленный Load документ
+   * @param {Object} session - Сессия транзакции (опционально)
+   */
+  async syncPaymentsWithLoad(load, session = null) {
+    const loadId = load._id?.toString() || load.id?.toString() || 'unknown';
+    const orderId = load.orderId || loadId;
+    
+    if (!load.paymentReceivable && !load.paymentPayable) {
+      return;
+    }
+
+    try {
+      // Рассчитываем суммы для PaymentReceivable
+      const baseCustomerRate = parseFloat(load.customerRate) || 0;
+      const customerFees = Array.isArray(load.fees) 
+        ? load.fees.map(fee => ({
+            type: fee.type,
+            customerRate: parseFloat(fee.customerRate) || 0,
+            total: parseFloat(fee.total) || 0
+          }))
+        : [];
+      const feesCustomerTotal = customerFees.reduce((sum, fee) => sum + fee.customerRate, 0);
+      const tonuCustomerRate = (load.tonu?.enabled && load.tonu?.customerRate) 
+        ? parseFloat(load.tonu.customerRate) || 0 
+        : 0;
+      const totalCustomerAmount = baseCustomerRate + feesCustomerTotal + tonuCustomerRate;
+
+      // Рассчитываем суммы для PaymentPayable
+      const baseCarrierRate = parseFloat(load.carrierRate) || 0;
+      const carrierFees = Array.isArray(load.fees) 
+        ? load.fees.map(fee => ({
+            type: fee.type,
+            carrierRate: parseFloat(fee.carrierRate) || 0,
+            total: parseFloat(fee.total) || 0
+          }))
+        : [];
+      const feesCarrierTotal = carrierFees.reduce((sum, fee) => sum + fee.carrierRate, 0);
+      const tonuCarrierRate = (load.tonu?.enabled && load.tonu?.carrierRate) 
+        ? parseFloat(load.tonu.carrierRate) || 0 
+        : 0;
+      const totalCarrierAmount = baseCarrierRate + feesCarrierTotal + tonuCarrierRate;
+
+      // Обновляем PaymentReceivable если он существует
+      if (load.paymentReceivable) {
+        try {
+          const updateData = {
+            orderId: load.orderId,
+            customerRate: baseCustomerRate,
+            totalAmount: totalCustomerAmount,
+            fees: customerFees,
+            tonu: {
+              enabled: load.tonu?.enabled || false,
+              customerRate: tonuCustomerRate
+            }
+          };
+
+          const updateOptions = session ? { session, new: true, runValidators: true } : { new: true, runValidators: true };
+          await PaymentReceivable.findByIdAndUpdate(
+            load.paymentReceivable,
+            updateData,
+            updateOptions
+          );
+        } catch (error) {
+          console.error(`[LoadController] Failed to sync PaymentReceivable for load ${orderId}:`, error.message);
+          // Не прерываем выполнение, так как это не критично
+        }
+      }
+
+      // Обновляем PaymentPayable если он существует
+      if (load.paymentPayable) {
+        try {
+          const updateData = {
+            orderId: load.orderId,
+            carrierRate: baseCarrierRate,
+            totalAmount: totalCarrierAmount,
+            fees: carrierFees,
+            tonu: {
+              enabled: load.tonu?.enabled || false,
+              carrierRate: tonuCarrierRate
+            }
+          };
+
+          const updateOptions = session ? { session, new: true, runValidators: true } : { new: true, runValidators: true };
+          await PaymentPayable.findByIdAndUpdate(
+            load.paymentPayable,
+            updateData,
+            updateOptions
+          );
+        } catch (error) {
+          console.error(`[LoadController] Failed to sync PaymentPayable for load ${orderId}:`, error.message);
+          // Не прерываем выполнение, так как это не критично
+        }
+      }
+    } catch (error) {
+      console.error(`[LoadController] Error syncing payments for load ${orderId}:`, error.message);
+      // Не прерываем выполнение, так как это не критично
+    }
+  }
+
+  // Специфичные методы для Load
+  getByStatus = async (req, res) => {
+    try {
+      const accessContext = await resolveAccessContext(req);
+      if (accessContext.error) {
+        return res.status(accessContext.error.status).json({
+          success: false,
+          error: accessContext.error.error
+        });
+      }
+      const accessFilterResult = await getAccessFilter(accessContext);
+      if (accessFilterResult.error) {
+        return res.status(accessFilterResult.error.status).json({
+          success: false,
+          error: accessFilterResult.error.error
+        });
+      }
+      if (accessFilterResult.partnerOnly) {
+        return res.status(403).json({
+          success: false,
+          error: "Access denied"
+        });
+      }
+
+      const status = req.params.status || req.query.status;
+      const { page = 1, limit = 10 } = req.query;
+
+      const filter = mergeFilters(accessFilterResult.filter, { status });
+      const result = await getLoadsWithPagination(
+        this.model,
+        filter,
+        this.populateFields,
+        this.dto,
+        page,
+        limit,
+        { createdAt: -1 }
+      );
+
+      const data = result.data.map((load) => maybeStripPaymentFields(accessContext.role, load));
+      res.status(200).json({
+        success: true,
+        data,
+        pagination: result.pagination
+      });
+    } catch (error) {
+      this.handleError(res, error, "Failed to fetch loads by status");
     }
   };
 
   getByCarrier = async (req, res) => {
     try {
-      const { carrierId } = req.params;
-      const { page = 1, limit = 10 } = req.query;
-
-      if (!mongoose.Types.ObjectId.isValid(carrierId)) {
-        return res.status(400).json({
+      const accessContext = await resolveAccessContext(req);
+      if (accessContext.error) {
+        return res.status(accessContext.error.status).json({
           success: false,
-          error: 'Invalid carrier ID format'
+          error: accessContext.error.error
+        });
+      }
+      const accessFilterResult = await getAccessFilter(accessContext);
+      if (accessFilterResult.error) {
+        return res.status(accessFilterResult.error.status).json({
+          success: false,
+          error: accessFilterResult.error.error
+        });
+      }
+      if (accessFilterResult.partnerOnly) {
+        return res.status(403).json({
+          success: false,
+          error: "Access denied"
         });
       }
 
-      const loads = await this.model
-        .find({ carrier: carrierId })
-        .populate(this.populateFields)
-        .sort({ createdAt: -1 })
-        .skip((page - 1) * limit)
-        .limit(parseInt(limit));
+      const carrierId = req.params.carrierId || req.params.driverId;
+      const { page = 1, limit = 10 } = req.query;
 
-      const total = await this.model.countDocuments({ carrier: carrierId });
+      const idValidation = validateObjectId(carrierId);
+      if (!idValidation.valid) {
+        return res.status(400).json({
+          success: false,
+          error: "Invalid carrier ID format",
+        });
+      }
 
-      const formattedLoads = this.dto ? loads.map(load => this.dto.format(load)) : loads;
+      const filter = mergeFilters(accessFilterResult.filter, { carrier: carrierId });
+      const result = await getLoadsWithPagination(
+        this.model,
+        filter,
+        this.populateFields,
+        this.dto,
+        page,
+        limit,
+        { createdAt: -1 }
+      );
 
+      const data = result.data.map((load) => maybeStripPaymentFields(accessContext.role, load));
       res.status(200).json({
         success: true,
-        data: formattedLoads,
-        pagination: {
-          total,
-          totalPages: Math.ceil(total / limit),
-          currentPage: parseInt(page),
-          limit: parseInt(limit)
-        }
+        data,
+        pagination: result.pagination
       });
     } catch (error) {
-      this.handleError(res, error, 'Failed to fetch loads by carrier');
+      this.handleError(res, error, "Failed to fetch loads by carrier");
     }
   };
 
   getByCustomer = async (req, res) => {
     try {
+      const accessContext = await resolveAccessContext(req);
+      if (accessContext.error) {
+        return res.status(accessContext.error.status).json({
+          success: false,
+          error: accessContext.error.error
+        });
+      }
+      const accessFilterResult = await getAccessFilter(accessContext);
+      if (accessFilterResult.error) {
+        return res.status(accessFilterResult.error.status).json({
+          success: false,
+          error: accessFilterResult.error.error
+        });
+      }
+      if (accessFilterResult.partnerOnly) {
+        return res.status(403).json({
+          success: false,
+          error: "Access denied"
+        });
+      }
+
       const { customerId } = req.params;
       const { page = 1, limit = 10 } = req.query;
 
-      if (!mongoose.Types.ObjectId.isValid(customerId)) {
+      const idValidation = validateObjectId(customerId);
+      if (!idValidation.valid) {
         return res.status(400).json({
           success: false,
-          error: 'Invalid customer ID format'
+          error: "Invalid customer ID format",
         });
       }
 
-      const loads = await this.model
-        .find({ customer: customerId })
-        .populate(this.populateFields)
-        .sort({ createdAt: -1 })
-        .skip((page - 1) * limit)
-        .limit(parseInt(limit));
+      if (accessContext.role === 'dispatcher' || accessContext.role === 'Pre-dispatcher' || accessContext.role === 'bidAgent') {
+        if (!accessContext.allowedCustomerIds.includes(customerId)) {
+          return res.status(403).json({
+            success: false,
+            error: "Access denied"
+          });
+        }
+      }
+      if (accessContext.role === 'salesAgent') {
+        const customerDoc = await Customer.findById(customerId).select('type').lean();
+        if (!customerDoc || customerDoc.type !== 'platform') {
+          return res.status(403).json({
+            success: false,
+            error: "Access denied"
+          });
+        }
+      }
 
-      const total = await this.model.countDocuments({ customer: customerId });
+      const filter = mergeFilters(accessFilterResult.filter, { customer: customerId });
+      const result = await getLoadsWithPagination(
+        this.model,
+        filter,
+        this.populateFields,
+        this.dto,
+        page,
+        limit,
+        { createdAt: -1 }
+      );
 
-      const formattedLoads = this.dto ? loads.map(load => this.dto.format(load)) : loads;
-
+      const data = result.data.map((load) => maybeStripPaymentFields(accessContext.role, load));
       res.status(200).json({
         success: true,
-        data: formattedLoads,
-        pagination: {
-          total,
-          totalPages: Math.ceil(total / limit),
-          currentPage: parseInt(page),
-          limit: parseInt(limit)
-        }
+        data,
+        pagination: result.pagination
       });
     } catch (error) {
-      this.handleError(res, error, 'Failed to fetch loads by customer');
+      this.handleError(res, error, "Failed to fetch loads by customer");
     }
   };
 
-  // Вспомогательная функция для парсинга JSON строк из form-data
-  parseJsonField(value) {
-    if (!value) return null;
-    if (typeof value === 'string') {
-      try {
-        return JSON.parse(value);
-      } catch (e) {
-        // Если не JSON, возвращаем как есть
-        return value;
-      }
-    }
-    return value;
-  }
-
-  // Вспомогательная функция для фильтрации null и пустых значений из объекта
-  filterNullValues(obj) {
-    if (!obj || typeof obj !== 'object') return obj;
-    
-    // Проверяем, является ли объект ObjectId (MongoDB ObjectId)
-    // ObjectId имеет свойство _bsontype или является экземпляром mongoose.Types.ObjectId
-    if (obj._bsontype === 'ObjectID' || (mongoose.Types.ObjectId && obj instanceof mongoose.Types.ObjectId)) {
-      return obj; // Возвращаем ObjectId как есть
-    }
-    
-    if (Array.isArray(obj)) {
-      const filtered = obj.map(item => {
-        // Проверяем ObjectId в массиве
-        if (item && typeof item === 'object' && (item._bsontype === 'ObjectID' || (mongoose.Types.ObjectId && item instanceof mongoose.Types.ObjectId))) {
-          return item;
-        }
-        
-        // Если элемент - объект, фильтруем его поля
-        if (typeof item === 'object' && item !== null && !Array.isArray(item)) {
-          const filteredItem = {};
-          for (const key in item) {
-            const val = item[key];
-            if (val !== null && val !== undefined && val !== '') {
-              // Проверяем ObjectId
-              if (val && typeof val === 'object' && (val._bsontype === 'ObjectID' || (mongoose.Types.ObjectId && val instanceof mongoose.Types.ObjectId))) {
-                filteredItem[key] = val;
-              } else if (typeof val === 'object' && !Array.isArray(val)) {
-                // Рекурсивно фильтруем вложенные объекты и массивы
-                const filteredVal = this.filterNullValues(val);
-                if (Object.keys(filteredVal).length > 0) {
-                  filteredItem[key] = filteredVal;
-                }
-              } else if (Array.isArray(val)) {
-                const filteredArr = this.filterNullValues(val);
-                if (filteredArr.length > 0) {
-                  filteredItem[key] = filteredArr;
-                }
-              } else {
-                filteredItem[key] = val;
-              }
-            }
-          }
-          return filteredItem;
-        }
-        // Для примитивных значений фильтруем null/undefined/пустые строки
-        return item !== null && item !== undefined && item !== '' ? item : null;
-      }).filter(item => {
-        // Удаляем null элементы и пустые объекты
-        if (item === null || item === undefined) return false;
-        if (typeof item === 'object' && !Array.isArray(item)) {
-          // Не удаляем ObjectId
-          if (item._bsontype === 'ObjectID' || (mongoose.Types.ObjectId && item instanceof mongoose.Types.ObjectId)) {
-            return true;
-          }
-          return Object.keys(item).length > 0;
-        }
-        return item !== '';
-      });
-      return filtered;
-    }
-    
-    const filtered = {};
-    for (const key in obj) {
-      const value = obj[key];
-      // Пропускаем null, undefined и пустые строки
-      if (value === null || value === undefined || value === '') {
-        continue;
-      }
-      
-      // Проверяем ObjectId
-      if (value && typeof value === 'object' && (value._bsontype === 'ObjectID' || (mongoose.Types.ObjectId && value instanceof mongoose.Types.ObjectId))) {
-        filtered[key] = value; // Сохраняем ObjectId как есть
-      } else if (typeof value === 'object' && !Array.isArray(value)) {
-        const filteredObj = this.filterNullValues(value);
-        // Оставляем объект только если в нем есть хотя бы одно не-null значение
-        if (Object.keys(filteredObj).length > 0) {
-          filtered[key] = filteredObj;
-        }
-      } else if (Array.isArray(value)) {
-        const filteredArray = this.filterNullValues(value);
-        // Удаляем пустые массивы
-        if (filteredArray.length > 0) {
-          filtered[key] = filteredArray;
-        }
-      } else {
-        filtered[key] = value;
-      }
-    }
-    return filtered;
-  }
-
-  // Переопределяем create для Load с новой структурой
   create = async (req, res) => {
     try {
-      const loadData = req.body.load || req.body; // Поддержка вложенной структуры
-
-      // Парсим JSON строки из form-data (если пришли через multipart/form-data)
-      let customerData = loadData.customer ? this.parseJsonField(loadData.customer) : null;
-      let carrierData = loadData.carrier ? this.parseJsonField(loadData.carrier) : null;
-      const typeData = loadData.type ? this.parseJsonField(loadData.type) : { freight: false, vehicle: false };
-      
-      // Фильтруем пустые строки из customerData и carrierData
-      if (customerData) {
-        customerData = this.filterNullValues(customerData);
-        // Если после фильтрации customerData пустой или нет companyName, устанавливаем null
-        if (Object.keys(customerData).length === 0 || !customerData.companyName || customerData.companyName.trim() === '') {
-          customerData = null;
-        }
-      }
-      
-      if (carrierData) {
-        carrierData = this.filterNullValues(carrierData);
-        // Если после фильтрации carrierData пустой или нет ни name, ни companyName, устанавливаем null
-        if (Object.keys(carrierData).length === 0 || 
-            ((!carrierData.name || carrierData.name.trim() === '') && 
-             (!carrierData.companyName || carrierData.companyName.trim() === ''))) {
-          // Но если есть id, оставляем carrierData для поиска существующего carrier
-          if (!carrierData.id) {
-            carrierData = null;
-          }
-        }
-      }
-      let vehicleData = loadData.vehicle ? this.parseJsonField(loadData.vehicle) : null;
-      let freightData = loadData.freight ? this.parseJsonField(loadData.freight) : null;
-      const pickupData = loadData.pickup ? this.parseJsonField(loadData.pickup) : {};
-      const deliveryData = loadData.delivery ? this.parseJsonField(loadData.delivery) : {};
-      const insuranceData = loadData.insurance ? this.parseJsonField(loadData.insurance) : {};
-      const datesData = loadData.dates ? this.parseJsonField(loadData.dates) : {};
-
-      // Фильтрация null значений для freight, если тип freight (и нет vehicle)
-      if (typeData.freight && !typeData.vehicle && freightData) {
-        freightData = this.filterNullValues(freightData);
-        // Если после фильтрации freight пустой или shipment пустой, устанавливаем null
-        if (!freightData || 
-            (freightData.shipment && (!Array.isArray(freightData.shipment) || freightData.shipment.length === 0)) ||
-            (Object.keys(freightData).length === 0)) {
-          freightData = null;
-        }
-      }
-
-      // Фильтрация null значений для vehicle, если тип vehicle (и нет freight)
-      if (typeData.vehicle && !typeData.freight && vehicleData) {
-        vehicleData = this.filterNullValues(vehicleData);
-        // Если после фильтрации vehicle пустой или shipment пустой, устанавливаем null
-        if (!vehicleData || 
-            (vehicleData.shipment && (!Array.isArray(vehicleData.shipment) || vehicleData.shipment.length === 0)) ||
-            (Object.keys(vehicleData).length === 0)) {
-          vehicleData = null;
-        }
-      }
-
-      // Оптимизированная проверка уникальности VIN для vehicle (одним запросом)
-      let duplicateVin = null;
-      if (vehicleData && vehicleData.shipment && Array.isArray(vehicleData.shipment)) {
-        const vins = vehicleData.shipment
-          .map(s => s.vin?.trim())
-          .filter(vin => vin && vin !== '');
-        
-        if (vins.length > 0) {
-          const existingLoad = await this.model.findOne({
-            'vehicle.shipment.vin': { $in: vins }
-          }).select('orderId vehicle.shipment.vin').lean();
-          
-          if (existingLoad) {
-            // Находим конкретный дублирующийся VIN
-            const duplicateVinInLoad = existingLoad.vehicle?.shipment?.find(s => 
-              s.vin && vins.includes(s.vin.trim())
-            );
-            duplicateVin = duplicateVinInLoad?.vin || vins[0];
-            
-            return res.status(400).json({
-              success: false,
-              error: 'Duplicate VIN',
-              message: `VIN "${duplicateVin}" already exists in another load (Order ID: ${existingLoad.orderId})`
-            });
-          }
-        }
-      }
-
-      // Параллельная обработка Customer, Carrier и orderId
-      // Проверяем orderId: если пустая строка или не передан, генерируем новый
-      const orderIdToUse = (loadData.orderId && loadData.orderId.trim() !== '') 
-        ? loadData.orderId.trim() 
-        : null;
-      
-      const [customerIdResult, carrierIdResult, orderIdResult] = await Promise.all([
-        // Обработка Customer
-        customerData ? this.findOrCreateCustomer(customerData) : Promise.resolve(null),
-        // Обработка Carrier
-        carrierData ? this.findOrCreateCarrier(carrierData) : Promise.resolve(null),
-        // Генерация orderId, если не передан или пустая строка (оптимизированная версия)
-        orderIdToUse ? Promise.resolve(orderIdToUse) : this.generateOrderId()
-      ]);
-
-      const customerId = customerIdResult;
-      const carrierId = carrierIdResult;
-      const orderId = orderIdResult;
-
-      // Обработка customerEmails и carrierEmails (могут быть строками или массивами)
-      let customerEmails = loadData.customerEmails;
-      if (typeof customerEmails === 'string') {
-        customerEmails = customerEmails.split(',').map(email => email.trim()).filter(email => email);
-      }
-      if (!Array.isArray(customerEmails)) {
-        customerEmails = customerEmails ? [customerEmails] : [];
-      }
-
-      let carrierEmails = loadData.carrierEmails;
-      if (typeof carrierEmails === 'string') {
-        carrierEmails = carrierEmails.split(',').map(email => email.trim()).filter(email => email);
-      }
-      if (!Array.isArray(carrierEmails)) {
-        carrierEmails = carrierEmails ? [carrierEmails] : [];
-      }
-
-      // Автоматически устанавливаем createdBy из токена авторизации
-      // Если пользователь авторизован - используем его ID
-      // Если не авторизован, но передан createdBy в body - используем его (для тестирования)
-      // Если ни того, ни другого - возвращаем ошибку
-      let createdBy = req.user?.id || req.body.createdBy;
-      
-      // Если createdBy не установлен, возвращаем ошибку
-      if (!createdBy) {
-        return res.status(401).json({
+      // Парсим данные из запроса
+      let loadData;
+      try {
+        loadData = parseLoadData(req.body);
+      } catch (error) {
+        return res.status(400).json({
           success: false,
-          error: 'Authentication required',
-          message: 'You must be authenticated to create a load. Please provide a valid authorization token or createdBy in request body.'
+          error: "Invalid JSON in load field",
+          details: error.message,
         });
       }
 
-      // Фильтрация пустых строк из pickup, delivery, insurance, dates
-      const filteredPickup = this.filterNullValues(pickupData);
-      const filteredDelivery = this.filterNullValues(deliveryData);
-      const filteredInsurance = this.filterNullValues(insuranceData);
-      const filteredDates = this.filterNullValues(datesData);
+      const accessContext = await resolveAccessContext(req);
+      if (accessContext.error) {
+        return res.status(accessContext.error.status).json({
+          success: false,
+          error: accessContext.error.error
+        });
+      }
+      if (!canCreateLoad(accessContext.role)) {
+        return res.status(403).json({
+          success: false,
+          error: "Access denied"
+        });
+      }
+      loadData = filterLoadDataByRole(accessContext.role, loadData);
 
-      // Подготовка данных для Load (только поля с значениями)
-      const loadDocument = {
+      // Валидируем и нормализуем данные
+      const customerData = validateCustomerData(loadData.customer);
+      const carrierData = validateCarrierData(loadData.carrier);
+      const typeData = loadData.type
+        ? parseJsonField(loadData.type)
+        : { freight: false, vehicle: false };
+
+      let vehicleData = validateVehicleData(loadData.vehicle, typeData);
+      let freightData = validateFreightData(loadData.freight, typeData);
+      const pickupData = loadData.pickup ? normalizeLocationAddress(parseJsonField(loadData.pickup)) : {};
+      const deliveryData = loadData.delivery
+        ? normalizeLocationAddress(parseJsonField(loadData.delivery))
+        : {};
+      const insuranceData = loadData.insurance
+        ? parseJsonField(loadData.insurance)
+        : {};
+      const datesData = loadData.dates ? parseJsonField(loadData.dates) : {};
+      const feesData = loadData.fees ? parseJsonField(loadData.fees) : [];
+      const tonuData = loadData.tonu ? parseJsonField(loadData.tonu) : null;
+
+      if (accessContext.role === 'Pre-dispatcher') {
+        const customerId = getIdString(customerData?.id || loadData.customer);
+        if (!customerId || !accessContext.allowedCustomerIds.includes(customerId)) {
+          return res.status(403).json({
+            success: false,
+            error: "Access denied"
+          });
+        }
+      }
+
+      if (accessContext.role === 'salesAgent') {
+        const customerId = getIdString(customerData?.id || loadData.customer);
+        const providedType = customerData?.type || loadData?.customer?.type;
+        if (providedType && providedType !== 'platform') {
+          return res.status(403).json({
+            success: false,
+            error: "Access denied"
+          });
+        }
+        if (!providedType && customerId) {
+          const customerDoc = await Customer.findById(customerId).select('type').lean();
+          if (!customerDoc || customerDoc.type !== 'platform') {
+            return res.status(403).json({
+              success: false,
+              error: "Access denied"
+            });
+          }
+        }
+        if (!providedType && !customerId) {
+          return res.status(403).json({
+            success: false,
+            error: "Access denied"
+          });
+        }
+      }
+
+      // Validate dates
+      if (datesData && Object.keys(datesData).length > 0) {
+        const datesValidation = validateDatesData(datesData);
+        if (datesValidation && !datesValidation.valid) {
+          return res.status(400).json({
+            success: false,
+            error: 'Invalid dates data',
+            details: datesValidation.errors || datesValidation.error
+          });
+        }
+      }
+
+      // Validate fees
+      const freightType = typeData?.freight;
+      if (feesData && Array.isArray(feesData) && feesData.length > 0) {
+        const feesValidation = validateFeesData(feesData, freightType);
+        if (feesValidation && !feesValidation.valid) {
+          return res.status(400).json({
+            success: false,
+            error: 'Invalid fees data',
+            details: feesValidation.errors || feesValidation.error
+          });
+        }
+      }
+
+      // Проверяем дубликаты VIN
+      const vinCheck = await checkDuplicateVIN(this.model, vehicleData);
+      if (vinCheck) {
+        return res.status(400).json({
+          success: false,
+          error: vinCheck.error,
+          message: vinCheck.message,
+        });
+      }
+
+      const orderId =
+        loadData.orderId?.trim() || (await this.generateOrderId());
+
+      // Проверяем уникальность orderId перед созданием
+      if (orderId) {
+        const existingLoad = await this.model.findOne({ orderId }).select('_id orderId').lean();
+        if (existingLoad) {
+          return res.status(400).json({
+            success: false,
+            error: 'Duplicate order ID',
+            message: `Load with Order ID "${orderId}" already exists`
+          });
+        }
+      }
+
+      // Создаем или находим customer и carrier
+      const [customerId, carrierId] = await Promise.all([
+        customerData
+          ? customerService.findOrCreate(customerData)
+          : Promise.resolve(null),
+        carrierData
+          ? carrierService.findOrCreate(carrierData)
+          : Promise.resolve(null),
+      ]);
+
+      // Нормализуем emails
+      const { customerEmails, carrierEmails } = normalizeEmailsForLoad(loadData);
+
+      // Синхронизируем email (берем первый из массива если есть)
+      await Promise.all([
+        customerEmails.length > 0 && customerId
+          ? customerService.syncEmail(customerId, customerEmails[0])
+          : Promise.resolve(),
+      ]);
+
+      // Проверяем createdBy
+      const createdByCheck = validateCreatedBy(req.user, req.body.createdBy);
+      if (!createdByCheck.valid) {
+        return res.status(401).json({
+          success: false,
+          error: createdByCheck.error,
+          message: createdByCheck.message,
+        });
+      }
+
+      if (loadData.tempEntityId && typeof loadData.tempEntityId === 'string' && loadData.tempEntityId.startsWith('temp-')) {
+        req.tempEntityId = loadData.tempEntityId;
+      }
+      let loadDocument = prepareLoadDocument({
         orderId,
-        ...(customerId && { customer: customerId }),
-        customerEmails: customerEmails.length > 0 ? customerEmails : undefined,
-        ...(loadData.customerRate && loadData.customerRate.trim() !== '' && { customerRate: loadData.customerRate.trim() }),
-        ...(loadData.carrierRate && loadData.carrierRate.trim() !== '' && { carrierRate: loadData.carrierRate.trim() }),
-        type: typeData,
-        ...(Object.keys(filteredPickup).length > 0 && { pickup: filteredPickup }),
-        ...(Object.keys(filteredDelivery).length > 0 && { delivery: filteredDelivery }),
-        ...(carrierId && { carrier: carrierId }),
-        carrierEmails: carrierEmails.length > 0 ? carrierEmails : undefined,
-        carrierPhotos: Array.isArray(loadData.carrierPhotos) && loadData.carrierPhotos.filter(photo => photo && photo.trim() !== '').length > 0 
-          ? loadData.carrierPhotos.filter(photo => photo && photo.trim() !== '') 
-          : undefined,
-        ...(Object.keys(filteredInsurance).length > 0 && { insurance: filteredInsurance }),
-        status: loadData.status || 'Listed',
-        ...(Object.keys(filteredDates).length > 0 && { dates: filteredDates }),
-        ...(loadData.tracking && loadData.tracking.trim() !== '' && { tracking: loadData.tracking.trim() }),
-        documents: Array.isArray(loadData.documents) && loadData.documents.filter(doc => doc && doc.trim() !== '').length > 0
-          ? loadData.documents.filter(doc => doc && doc.trim() !== '')
-          : undefined,
-        createdBy: createdBy
-      };
+        customerId,
+        carrierId,
+        customerEmails,
+        carrierEmails,
+        customerRate: loadData.customerRate,
+        carrierRate: loadData.carrierRate,
+        typeData,
+        pickupData,
+        deliveryData,
+        insuranceData,
+        datesData,
+        status: loadData.status,
+        tracking: loadData.tracking,
+        carrierPhotos: loadData.carrierPhotos,
+        bolDocuments: loadData.bolDocuments,
+        rateConfirmationDocuments: loadData.rateConfirmationDocuments,
+        documents: loadData.documents,
+        vehicleData,
+        freightData,
+        paymentMethod: loadData.paymentMethod,
+        paymentTerms: loadData.paymentTerms,
+        fees: feesData,
+        tonu: tonuData,
+        loadCarrierPeople: loadData.loadCarrierPeople,
+        loadCustomerRepresentativePeoples: loadData.loadCustomerRepresentativePeoples,
+        createdBy: createdByCheck.createdBy,
+      });
 
-      // Добавляем vehicle только если он не null и содержит валидные данные
-      if (vehicleData && 
-          vehicleData.shipment && 
-          Array.isArray(vehicleData.shipment) && 
-          vehicleData.shipment.length > 0) {
-        loadDocument.vehicle = vehicleData;
-      }
+      // Обрабатываем загруженные файлы
+      const fileProcessResult = processUploadedFiles(
+        loadDocument,
+        req.uploadedFiles,
+        vehicleData,
+        freightData
+      );
+      loadDocument = fileProcessResult.loadDocument;
+      vehicleData = fileProcessResult.vehicleData;
+      freightData = fileProcessResult.freightData;
 
-      // Добавляем freight только если он не null и содержит валидные данные
-      if (freightData && 
-          freightData.shipment && 
-          Array.isArray(freightData.shipment) && 
-          freightData.shipment.length > 0) {
-        loadDocument.freight = freightData;
-      }
-
-      // Обработка загруженных файлов
-      if (req.uploadedFiles && req.uploadedFiles.length > 0) {
-        // Распределяем файлы по соответствующим полям
-        // Это можно улучшить, добавив логику определения типа файла
-        loadDocument.documents = [...(loadDocument.documents || []), ...req.uploadedFiles];
-      }
-
-      // Фильтруем все null и пустые значения из loadDocument перед сохранением
-      const cleanedLoadDocument = this.filterNullValues(loadDocument);
+      // Финальная очистка и синхронизация
+      const cleanedLoadDocument = finalizeLoadDocument(loadDocument);
 
       // Создание записи
       const newDoc = new this.model(cleanedLoadDocument);
       const saved = await newDoc.save();
 
-      // Параллельное обновление Customer и Carrier, добавляя ссылку на Load
-      const updatePromises = [];
-      if (customerId) {
-        updatePromises.push(
-          Customer.findByIdAndUpdate(customerId, {
-            $addToSet: { loads: saved._id }
-          })
-        );
+      // If files were uploaded with temp ID, move them to real load ID
+      if (
+        req.isNewLoad &&
+        req.tempEntityId &&
+        req.tempEntityId.startsWith("temp-") &&
+        req.uploadedFiles
+      ) {
+        const tempId = req.tempEntityId;
+        const updatePromises = [];
+        
+        await updateTempFileKeys(saved, tempId, updatePromises);
+        
+        if (updatePromises.length > 0) {
+          await Promise.all(updatePromises);
+        }
       }
-      if (carrierId) {
-        updatePromises.push(
-          Carrier.findByIdAndUpdate(carrierId, {
-            $addToSet: { loads: saved._id }
-          })
-        );
-      }
-      await Promise.all(updatePromises);
 
-      // Генерация BOL PDF - ВРЕМЕННО ОТКЛЮЧЕНО для тестирования интеграции с UI
-      // try {
-      //   const formattedLoadData = this.dto ? this.dto.format(saved) : saved;
-      //   const bolResult = await pdfService.generateBOL(formattedLoadData, saved._id.toString());
-      //   saved.bolPdfPath = bolResult.filename;
-      //   await saved.save();
-      // } catch (pdfError) {
-      //   console.error('Error generating BOL PDF during load creation:', pdfError);
-      // }
-
-      // Параллельное создание истории и загрузка полных данных с populate
-      const [_, populatedLoad] = await Promise.all([
-        // Создаем запись в истории (если нужно)
-        this.historyModel && saved.createdBy 
-          ? this.createHistoryRecord(saved._id, 'created', saved.createdBy, [])
+      await Promise.all([
+        customerId
+          ? Customer.findByIdAndUpdate(customerId, {
+              $addToSet: { loads: saved._id },
+            })
           : Promise.resolve(),
-        // Загружаем полные данные с populate
-        this.model.findById(saved._id)
-          .populate('customer')
-          .populate('carrier')
-          .populate('createdBy')
+        carrierId
+          ? Carrier.findByIdAndUpdate(carrierId, {
+              $addToSet: { loads: saved._id },
+            })
+          : Promise.resolve(),
       ]);
 
-      // Применение DTO
-      const formattedDoc = this.dto ? this.dto.format(populatedLoad) : populatedLoad;
+      const [_, populatedLoad] = await Promise.all([
+        this.historyModel && saved.createdBy
+          ? this.createHistoryRecord(saved._id, "created", saved.createdBy, [])
+          : Promise.resolve(),
+        this.model
+          .findById(saved._id)
+          .populate("customer")
+          .populate("carrier")
+          .populate("createdBy"),
+      ]);
 
-      // Send notification for load creation (non-blocking)
-      notificationService.sendLoadCreated(populatedLoad, createdBy)
-        .catch(error => {
-          console.error('[LoadController] Failed to send load created notification:', error);
+      let formattedDoc = formatDocument(this.dto, populatedLoad);
+      formattedDoc = maybeStripPaymentFields(accessContext.role, formattedDoc);
+
+      const createdByUserId = populatedLoad.createdBy?._id?.toString() || populatedLoad.createdBy?.toString() || createdByCheck.createdBy;
+      notificationService
+        .sendLoadCreated(populatedLoad, createdByUserId)
+        .catch((error) => {
+          console.error("[LoadController] Failed to send notification:", error);
+          console.error("[LoadController] Error stack:", error.stack);
+        });
+
+      sendLoadDetailsEmail(populatedLoad, { isStatusUpdate: false })
+        .catch((error) => {
+          console.error("[LoadController] Failed to send load details email:", error);
+          console.error("[LoadController] Error stack:", error.stack);
+        });
+
+      markDirtyForLoad(populatedLoad, ['loads'])
+        .catch((error) => {
+          console.error("[LoadController] Failed to mark dirty for load:", error);
         });
 
       res.status(201).json({
         success: true,
         data: formattedDoc,
-        message: 'Load created successfully'
+        message: "Load created successfully",
       });
     } catch (error) {
-      this.handleError(res, error, 'Failed to create load');
+      this.handleError(res, error, "Failed to create load");
+    }
+  };
+
+  _generatePdfAndUpload = async (req, res, type) => {
+    try {
+      let loadData;
+      try {
+        loadData = parseLoadData(req.body);
+      } catch (e) {
+        return res.status(400).json({
+          success: false,
+          error: "Invalid JSON in load field",
+          details: e.message,
+        });
+      }
+      const loadId = req.params.id || null;
+      const entityId = loadId || `temp-${crypto.randomUUID()}`;
+      const subType = type === "bol" ? "bol" : "rateConfirmation";
+      let existingLoad = null;
+      if (type === "bol" || type === "rateConfirmation") {
+        if (loadId) {
+          const load = await this.model.findById(loadId).populate("createdBy", "email phoneNumber").lean();
+          existingLoad = load;
+          if (load) {
+            if (load.createdBy && typeof load.createdBy === "object") {
+              loadData.createdBy = load.createdBy;
+            }
+            if (type === "rateConfirmation" && load.createdAt != null) {
+              loadData.createdAt = load.createdAt;
+            }
+            if (Array.isArray(load.loadCarrierPeople) && load.loadCarrierPeople.length > 0) {
+              loadData.loadCarrierPeople = load.loadCarrierPeople;
+            }
+          }
+        }
+        if (!loadData.createdBy?.email && req.user?.email) {
+          loadData.createdBy = {
+            ...(loadData.createdBy && typeof loadData.createdBy === "object" ? loadData.createdBy : {}),
+            email: req.user.email,
+            phoneNumber: req.user.phoneNumber ?? loadData.createdBy?.phoneNumber ?? ""
+          };
+        }
+      }
+      const generateFn = type === "bol"
+        ? (data, id) => pdfService.generateBOL(data, id)
+        : (data) => pdfService.generateRateConfirmation(data);
+      const result = await generateFn(loadData, loadId);
+      if (!result || !result.path) {
+        return res.status(500).json({
+          success: false,
+          error: "PDF generation failed",
+        });
+      }
+      const buffer = await fs.readFile(result.path);
+      const key = await uploadToS3(
+        buffer,
+        result.filename,
+        "loads",
+        entityId,
+        "pdfs",
+        subType
+      );
+      if (loadId) {
+        const updateField = type === "bol" ? "bolDocuments" : "rateConfirmationDocuments";
+        const oldKeys = existingLoad && Array.isArray(existingLoad[updateField]) ? existingLoad[updateField] : [];
+        if (oldKeys.length > 0) {
+          deleteFromS3Multiple(oldKeys).catch((err) => {
+            console.error("[LoadController] Error deleting previous PDF(s) from S3:", err);
+          });
+        }
+        await this.model.findByIdAndUpdate(loadId, {
+          $set: { [updateField]: [key] },
+        });
+      }
+      const signedUrl = await getSignedUrlForObject(key, 3600);
+      const payload = {
+        success: true,
+        key,
+        signedUrl: signedUrl || undefined,
+      };
+      if (!loadId) {
+        payload.tempEntityId = entityId;
+      }
+      res.status(200).json(payload);
+    } catch (error) {
+      console.error(`[LoadController] generate${type === "bol" ? "BOL" : "RateConfirmation"} error:`, error);
+      res.status(500).json({
+        success: false,
+        error: error.message || "PDF generation or upload failed",
+      });
+    }
+  };
+
+  generateBOL = (req, res) => this._generatePdfAndUpload(req, res, "bol");
+  generateRateConfirmation = (req, res) => this._generatePdfAndUpload(req, res, "rateConfirmation");
+
+  getRateConfirmationFieldMap = async (req, res) => {
+    try {
+      const result = await pdfService.generateRateConfirmationFieldMap();
+      if (req.query.mapping === '1' || req.query.mapping === 'true') {
+        const variables = result.mapping.map((m) => m.variable);
+        return res.json({
+          success: true,
+          message: `PDF saved to ${result.path}. Use without ?mapping=1 to download.`,
+          filename: result.filename,
+          path: result.path,
+          totalFields: result.totalFields,
+          mapping: result.mapping,
+          variables
+        });
+      }
+      return res.download(result.path, result.filename, (err) => {
+        if (err) res.status(500).json({ success: false, error: err.message });
+      });
+    } catch (error) {
+      console.error('[LoadController] getRateConfirmationFieldMap error:', error);
+      res.status(500).json({ success: false, error: error.message || 'Failed to generate Rate Confirmation field map' });
     }
   };
 
@@ -1030,10 +2605,12 @@ class LoadController extends UniversalBaseController {
     try {
       const { id } = req.params;
 
-      if (!mongoose.Types.ObjectId.isValid(id)) {
+      // Валидация ID
+      const idValidation = validateObjectId(id);
+      if (!idValidation.valid) {
         return res.status(400).json({
           success: false,
-          error: 'Invalid ID format'
+          error: idValidation.error,
         });
       }
 
@@ -1042,244 +2619,486 @@ class LoadController extends UniversalBaseController {
       if (!oldDoc) {
         return res.status(404).json({
           success: false,
-          error: 'Load not found'
+          error: "Load not found",
+        });
+      }
+
+      const accessContext = await resolveAccessContext(req);
+      if (accessContext.error) {
+        return res.status(accessContext.error.status).json({
+          success: false,
+          error: accessContext.error.error
+        });
+      }
+      if (!canUpdateStatus(accessContext.role)) {
+        return res.status(403).json({
+          success: false,
+          error: "Access denied"
+        });
+      }
+      const canRead = await hasLoadReadAccess(accessContext, oldDoc);
+      if (!canRead) {
+        return res.status(403).json({
+          success: false,
+          error: "Access denied"
+        });
+      }
+
+      if (oldDoc.status === "Cancelled") {
+        return res.status(400).json({
+          success: false,
+          error: "Load is cancelled",
+          message: "Cancelled loads cannot be modified."
         });
       }
 
       const loadData = req.body.load || req.body;
-
-      // Обработка customer - может быть ObjectId или объект
-      let customerId = oldDoc.customer;
-      let customerWasProvided = 'customer' in loadData;
-      
-      if (customerWasProvided) {
-        if (loadData.customer === null || loadData.customer === undefined) {
-          // Явное удаление customer
-          customerId = null;
-        }
-        // Если это ObjectId (строка или ObjectId)
-        else if (mongoose.Types.ObjectId.isValid(loadData.customer)) {
-          customerId = loadData.customer;
-        } 
-        // Если это объект, проверяем наличие id поля
-        else if (typeof loadData.customer === 'object') {
-          const customerData = this.parseJsonField(loadData.customer);
-          if (customerData) {
-            // Если объект содержит id, используем его напрямую
-            if (customerData.id && mongoose.Types.ObjectId.isValid(customerData.id)) {
-              customerId = customerData.id;
-            } else {
-              // Иначе обрабатываем через findOrCreateCustomer
-              try {
-                customerId = await this.findOrCreateCustomer(customerData);
-              } catch (error) {
-                return res.status(400).json({
-                  success: false,
-                  error: 'Failed to process customer',
-                  message: error.message
-                });
-              }
-            }
-          } else {
-            customerId = null;
-          }
-        }
+      if (Object.prototype.hasOwnProperty.call(loadData, 'pickup')) {
+        loadData.pickup = normalizeLocationAddress(parseJsonField(loadData.pickup));
+      }
+      if (Object.prototype.hasOwnProperty.call(loadData, 'delivery')) {
+        loadData.delivery = normalizeLocationAddress(parseJsonField(loadData.delivery));
       }
 
-      // Обработка carrier - может быть ObjectId или объект
-      let carrierId = oldDoc.carrier;
-      let carrierWasProvided = 'carrier' in loadData;
-      
-      if (carrierWasProvided) {
-        if (loadData.carrier === null || loadData.carrier === undefined) {
-          // Явное удаление carrier
-          carrierId = null;
-        }
-        // Если это ObjectId (строка или ObjectId)
-        else if (mongoose.Types.ObjectId.isValid(loadData.carrier)) {
-          carrierId = loadData.carrier;
-        } 
-        // Если это объект, проверяем наличие id поля
-        else if (typeof loadData.carrier === 'object') {
-          const carrierData = this.parseJsonField(loadData.carrier);
-          if (carrierData) {
-            // Если объект содержит id, используем его напрямую
-            if (carrierData.id && mongoose.Types.ObjectId.isValid(carrierData.id)) {
-              carrierId = carrierData.id;
-            } else {
-              // Иначе обрабатываем через findOrCreateCarrier
-              try {
-                carrierId = await this.findOrCreateCarrier(carrierData);
-              } catch (error) {
-                return res.status(400).json({
-                  success: false,
-                  error: 'Failed to process carrier',
-                  message: error.message
-                });
-              }
-            }
-          } else {
-            carrierId = null;
-          }
-        }
+      // Парсим fees и tonu если они приходят как JSON строки
+      const { parseJsonField } = require('../utils/dataHelpers');
+      if (loadData.fees !== undefined) {
+        loadData.fees = parseJsonField(loadData.fees);
+      }
+      if (loadData.tonu !== undefined) {
+        loadData.tonu = parseJsonField(loadData.tonu);
       }
 
-      // Подготовка данных для обновления (исключаем customer/carrier объекты сразу)
-      // Создаем новый объект без customer/carrier, чтобы избежать передачи объектов в MongoDB
-      const updateData = {};
-      Object.keys(loadData).forEach(key => {
-        // Пропускаем customer и carrier - они будут добавлены отдельно как ID
-        if (key !== 'customer' && key !== 'carrier') {
-          updateData[key] = loadData[key];
-        }
-      });
-      
-      // Добавляем customer/carrier только как ID, если они были предоставлены
-      if (customerWasProvided) {
-        updateData.customer = customerId;
+      // Обработка customer и carrier
+      let customerResult, carrierResult;
+      try {
+        [customerResult, carrierResult] = await Promise.all([
+          processCustomer(loadData, oldDoc.customer, customerService),
+          processCarrier(loadData, oldDoc.carrier, carrierService),
+        ]);
+      } catch (error) {
+        return res.status(400).json({
+          success: false,
+          error: error.message,
+        });
       }
 
-      if (carrierWasProvided) {
-        updateData.carrier = carrierId;
-      }
+      const { customerId, customerWasProvided } = customerResult;
+      const { carrierId, carrierWasProvided } = carrierResult;
+
+      // Подготовка данных для обновления
+      // Передаем существующие dates для мержа, чтобы не потерять неизмененные поля
+      const existingDates = oldDoc.dates ? (oldDoc.dates.toObject ? oldDoc.dates.toObject() : oldDoc.dates) : null;
+      const updateData = prepareUpdateData(
+        loadData,
+        customerId,
+        carrierId,
+        customerWasProvided,
+        carrierWasProvided,
+        existingDates
+      );
 
       // Фильтруем только измененные поля
       const filteredData = this.filterChangedFields(oldDoc, updateData);
-      
+
+      // IMPORTANT: Ensure fees and tonu are included if they were in updateData
+      // filterChangedFields might skip them if comparison fails for arrays/objects
+      if (updateData.fees !== undefined) {
+        filteredData.fees = updateData.fees;
+      }
+      if (updateData.tonu !== undefined) {
+        filteredData.tonu = updateData.tonu;
+      }
+
+      if (filteredData.status === "Listed" && oldDoc.status !== "Listed") {
+        Object.assign(filteredData, getStep5ResetData(oldDoc));
+      }
+
+      // Добавляем updatedBy если есть пользователь
+      if (req.user?.id) {
+        filteredData.updatedBy = req.user.id;
+      }
+
+      // ВАЛИДАЦИЯ: Проверяем требования для статуса "Delivered"
+      const newStatus = filteredData.status !== undefined ? filteredData.status : oldDoc.status;
+      const skipPayableForDelivered = newStatus === "Delivered" && oldDoc.status !== "Delivered"
+        ? await this.shouldSkipPayableForPlatformDelivered(oldDoc)
+        : false;
+      if (newStatus === "Delivered" && oldDoc.status !== "Delivered") {
+        const validationErrors = [];
+        
+        // Проверяем customer и customerRate (используем новые значения или старые)
+        const finalCustomerId = filteredData.customer !== undefined ? filteredData.customer : oldDoc.customer;
+        const finalCustomerRate = filteredData.customerRate !== undefined ? filteredData.customerRate : oldDoc.customerRate;
+        
+        if (!finalCustomerId) {
+          validationErrors.push({
+            field: "customer",
+            message: "Customer is required to set status to Delivered"
+          });
+        }
+        
+        const customerRate = parseFloat(finalCustomerRate) || 0;
+        if (!finalCustomerRate || customerRate <= 0) {
+          validationErrors.push({
+            field: "customerRate",
+            message: "Customer rate is required and must be greater than 0 to set status to Delivered"
+          });
+        }
+        
+        // Проверяем carrier и carrierRate (используем новые значения или старые)
+        const finalCarrierId = filteredData.carrier !== undefined ? filteredData.carrier : oldDoc.carrier;
+        const finalCarrierRate = filteredData.carrierRate !== undefined ? filteredData.carrierRate : oldDoc.carrierRate;
+        
+        if (!skipPayableForDelivered) {
+        if (!finalCarrierId) {
+          validationErrors.push({
+            field: "carrier",
+            message: "Carrier is required to set status to Delivered"
+          });
+        }
+        
+        const carrierRate = parseFloat(finalCarrierRate) || 0;
+        if (!finalCarrierRate || carrierRate <= 0) {
+          validationErrors.push({
+            field: "carrierRate",
+            message: "Carrier rate is required and must be greater than 0 to set status to Delivered"
+          });
+          }
+        }
+        
+        if (validationErrors.length > 0) {
+          return res.status(400).json({
+            success: false,
+            error: "Validation failed",
+            message: "Cannot set status to Delivered. Missing required fields.",
+            details: validationErrors
+          });
+        }
+      }
+
       // Если нет изменений, возвращаем существующую запись
       if (Object.keys(filteredData).length === 0) {
-        const formattedDoc = this.dto ? this.dto.format(oldDoc) : oldDoc;
+        let formattedDoc = formatDocument(this.dto, oldDoc);
+        formattedDoc = maybeStripPaymentFields(req.user?.role, formattedDoc);
         return res.status(200).json({
           success: true,
           data: formattedDoc,
-          message: 'No changes detected'
+          message: "No changes detected",
         });
       }
 
       // Подготовка данных (только для измененных полей)
       const data = this.prepareUpdateData(req, filteredData);
 
-      // Защитная проверка: убеждаемся, что customer и carrier - это ObjectId, а не объекты
-      if (data.customer && typeof data.customer === 'object' && !mongoose.Types.ObjectId.isValid(data.customer)) {
-        // Если это объект без валидного ObjectId, пытаемся извлечь id
-        if (data.customer.id && mongoose.Types.ObjectId.isValid(data.customer.id)) {
-          data.customer = data.customer.id;
-        } else {
-          delete data.customer; // Удаляем если не можем преобразовать
-        }
+      if (filteredData.fees !== undefined) {
+        data.fees = filteredData.fees;
       }
-      
-      if (data.carrier && typeof data.carrier === 'object' && !mongoose.Types.ObjectId.isValid(data.carrier)) {
-        // Если это объект без валидного ObjectId, пытаемся извлечь id
-        if (data.carrier.id && mongoose.Types.ObjectId.isValid(data.carrier.id)) {
-          data.carrier = data.carrier.id;
-        } else {
-          delete data.carrier; // Удаляем если не можем преобразовать
-        }
+      if (filteredData.tonu !== undefined) {
+        data.tonu = filteredData.tonu;
       }
 
-      // Обновление записи
-      const updated = await this.model.findByIdAndUpdate(
+      // Защитная проверка: убеждаемся, что customer и carrier - это ObjectId, а не объекты
+      normalizeObjectIdFields(data);
+
+      // Use loadService for update with audit (centralized history logging)
+      const actor = createActor(req.user);
+
+      // Use loadService.updateLoad for centralized history logging
+      const updatedLean = await loadService.updateLoad(
         id,
         data,
-        { new: true, runValidators: true }
-      )
-      .populate('customer')
-      .populate('carrier')
-      .populate('createdBy');
+        actor,
+        {} // Auto-detect action
+      );
+
+      // Populate for response
+      const updated = await this.model
+        .findById(id)
+        .populate("customer")
+        .populate("carrier")
+        .populate("createdBy")
+        .populate("updatedBy");
 
       // Обновляем связи в Customer и Carrier
-      if (customerId && customerId.toString() !== oldDoc.customer?.toString()) {
-        // Удаляем старую связь
-        if (oldDoc.customer) {
-          await Customer.findByIdAndUpdate(oldDoc.customer, {
-            $pull: { loads: id }
-          });
-        }
-        // Добавляем новую связь
-        if (customerId) {
-          await Customer.findByIdAndUpdate(customerId, {
-            $addToSet: { loads: id }
-          });
+      await updateCustomerCarrierLinks(
+        Customer,
+        Carrier,
+        oldDoc.customer,
+        customerId,
+        oldDoc.carrier,
+        carrierId,
+        id
+      );
+
+      // Синхронизируем платежи с Load, если они уже созданы и Load в статусе Delivered
+      if (updated && (updated.status === "Delivered" || updatedLean?.status === "Delivered")) {
+        // Загружаем Load с paymentReceivable и paymentPayable для синхронизации
+        const loadForSync = await this.model
+          .findById(id)
+          .populate("paymentReceivable")
+          .populate("paymentPayable")
+          .lean();
+        
+        if (loadForSync && (loadForSync.paymentReceivable || loadForSync.paymentPayable)) {
+          // Проверяем, были ли изменены поля, влияющие на платежи
+          const paymentRelatedFields = ['customerRate', 'carrierRate', 'fees', 'tonu', 'orderId'];
+          const hasPaymentChanges = Object.keys(filteredData).some(key => paymentRelatedFields.includes(key));
+          
+          if (hasPaymentChanges) {
+            await this.syncPaymentsWithLoad(loadForSync);
+          }
         }
       }
 
-      if (carrierId && carrierId.toString() !== oldDoc.carrier?.toString()) {
-        // Удаляем старую связь
-        if (oldDoc.carrier) {
-          await Carrier.findByIdAndUpdate(oldDoc.carrier, {
-            $pull: { loads: id }
-          });
-        }
-        // Добавляем новую связь
-        if (carrierId) {
-          await Carrier.findByIdAndUpdate(carrierId, {
-            $addToSet: { loads: id }
-          });
-        }
-      }
+      // Only send load_updated notification (not status changes or assignments)
 
-      // Запись в историю изменений
       if (this.historyModel) {
+        const oldStatus = oldDoc.status;
+        const newStatus = updated.status;
+        const statusChanged = oldStatus !== newStatus;
+        
         const changes = this.getChanges(oldDoc, updateData);
-        const userId = req.user?.id;
-        if (changes.length > 0 && userId) {
-          await this.createHistoryRecord(id, 'updated', userId, changes);
+        const nonStatusChanges = changes.filter((c) => c.field !== "status");
+        
+        if (statusChanged) {
+          console.log(`[LoadController] Status changed from ${oldStatus} to ${newStatus} for load ${id}`);
+          console.log(`[LoadController] Customer emails: ${updated?.customerEmails?.length || 0}, Carrier emails: ${updated?.carrierEmails?.length || 0}`);
+          console.log(`[LoadController] Customer emails array:`, updated?.customerEmails);
+          console.log(`[LoadController] Carrier emails array:`, updated?.carrierEmails);
+          
+          notificationService
+            .sendLoadStatusUpdate(
+              updated,
+              oldStatus,
+              newStatus,
+              req.user?.id
+            )
+            .catch((error) => {
+              console.error(
+                "[LoadController] Failed to send status update notification:",
+                error
+              );
+              console.error("[LoadController] Error stack:", error.stack);
+            });
+
+          const loadForEmail = updated.toObject ? updated.toObject() : updated;
+          if (!loadForEmail.customerEmails || loadForEmail.customerEmails.length === 0) {
+            loadForEmail.customerEmails = oldDoc.customerEmails || [];
+          }
+          if (!loadForEmail.carrierEmails || loadForEmail.carrierEmails.length === 0) {
+            loadForEmail.carrierEmails = oldDoc.carrierEmails || [];
+          }
+          
+          sendLoadDetailsEmail(loadForEmail, { 
+            isStatusUpdate: true, 
+            oldStatus: oldStatus, 
+            newStatus: newStatus 
+          })
+            .then(() => {
+              console.log(`[LoadController] Status update email sent successfully for load ${id}`);
+            })
+            .catch((error) => {
+              console.error("[LoadController] Failed to send load status update email:", error);
+              console.error("[LoadController] Error stack:", error.stack);
+            });
+
+          if (newStatus === "Picked Up" && updated?.customer?.type === "platform") {
+            this.createReceivableOnPickedUpForPlatform(updated, req.user?.id)
+              .catch((error) => {
+                console.error("[LoadController] Failed to create receivable on picked up:", error);
+              });
+          }
         }
-      }
-
-      // Send notifications (non-blocking) - use already populated updated document
-      // Send notification if status changed
-      if (updateData.status && updateData.status !== oldDoc.status) {
-        notificationService.sendLoadStatusUpdate(updated, oldDoc.status, updateData.status, req.user?.id)
-          .catch(error => {
-            console.error('[LoadController] Failed to send status update notification:', error);
-          });
-      }
-
-      // Send notification if carrier was assigned
-      if (carrierId && carrierId.toString() !== oldDoc.carrier?.toString()) {
-        notificationService.sendLoadAssigned(updated, carrierId, req.user?.id)
-          .catch(error => {
-            console.error('[LoadController] Failed to send load assigned notification:', error);
-          });
-      }
-
-      // Send general update notification (if something changed besides status and carrier assignment)
-      if (this.historyModel) {
-        const changes = this.getChanges(oldDoc, updateData);
-        // Only send if there are changes other than status (status notification is sent separately)
-        const nonStatusChanges = changes.filter(c => c.field !== 'status');
         if (nonStatusChanges.length > 0) {
           const changesObj = {};
-          nonStatusChanges.forEach(c => {
+          nonStatusChanges.forEach((c) => {
             changesObj[c.field] = { from: c.oldValue, to: c.newValue };
           });
-          notificationService.sendLoadUpdated(updated, changesObj, req.user?.id)
-            .catch(error => {
-              console.error('[LoadController] Failed to send load updated notification:', error);
+          notificationService
+            .sendLoadUpdated(updated, changesObj, req.user?.id)
+            .catch((error) => {
+              console.error(
+                "[LoadController] Failed to send update notification:",
+                error
+              );
+              console.error("[LoadController] Error stack:", error.stack);
             });
         }
       }
 
       // Создаем платежные записи при переходе в статус "Delivered"
-      if (updateData.status === 'Delivered' && oldDoc.status !== 'Delivered') {
-        this.createPaymentsOnDelivered(updated, req.user?.id)
-          .catch(error => {
-            console.error('[LoadController] Failed to create payment records:', error);
+      // ВАЛИДАЦИЯ уже выполнена выше, здесь просто создаем платежи
+      if (updateData.status === "Delivered" && oldDoc.status !== "Delivered") {
+        try {
+          await this.createPaymentsOnDelivered(updated, req.user?.id, null, {
+            skipPayable: skipPayableForDelivered
           });
+        } catch (error) {
+          console.error(
+            "[LoadController] Failed to create payment records:",
+            error
+          );
+          // Возвращаем ошибку пользователю, так как платежи обязательны для Delivered
+          return res.status(400).json({
+            success: false,
+            error: "Failed to create payment records",
+            message: error.message || "Cannot create payments for delivered load",
+            details: error.message
+          });
+        }
+      } else if (updated && updated.status === "Delivered") {
+        // Если Load уже в статусе Delivered, синхронизируем платежи при изменении fees/tonu/rates
+        const paymentRelatedFields = ['customerRate', 'carrierRate', 'fees', 'tonu', 'orderId'];
+        const hasPaymentChanges = Object.keys(updateData).some(key => paymentRelatedFields.includes(key));
+        
+        if (hasPaymentChanges) {
+          // Загружаем Load с paymentReceivable и paymentPayable для синхронизации
+          const loadForSync = await this.model
+            .findById(updated._id || id)
+            .populate("paymentReceivable")
+            .populate("paymentPayable")
+            .lean();
+          
+          if (loadForSync && (loadForSync.paymentReceivable || loadForSync.paymentPayable)) {
+            await this.syncPaymentsWithLoad(loadForSync);
+          }
+        }
+      }
+
+      const datesToMark = [];
+      const oldCreatedAt = oldDoc.createdAt;
+      const newCreatedAt = updated.createdAt;
+      if (oldCreatedAt) datesToMark.push(oldCreatedAt);
+      if (newCreatedAt && oldCreatedAt?.toString() !== newCreatedAt?.toString()) {
+        datesToMark.push(newCreatedAt);
+      }
+
+      const currentOldStatus = oldDoc.status;
+      const currentNewStatus = updated.status;
+      const statusChanged = currentOldStatus && currentNewStatus && currentOldStatus !== currentNewStatus;
+      
+      if (statusChanged) {
+        const { getCurrentDateUTC5 } = require("../utils/dateUtils");
+        const { getDateKeyUTC5 } = require("../utils/dateKeyUtils");
+        const { getMonthKeyFromDay, getISOWeekKeyFromDay, getYearKeyFromDay } = require("../utils/periodKeys");
+        const { getMonthRangeFromKey, getWeekRangeFromKey, getYearRangeFromKey } = require("../utils/dateKeyUtils");
+        const { markDirtyPeriod } = require("../utils/markDirty");
+        
+        const today = getCurrentDateUTC5();
+        datesToMark.push(today);
+        
+        const todayKey = getDateKeyUTC5(today);
+        const weekKey = getISOWeekKeyFromDay(todayKey);
+        const monthKey = getMonthKeyFromDay(todayKey);
+        const yearKey = getYearKeyFromDay(todayKey);
+        
+        const periodPromises = [];
+        
+        if (weekKey) {
+          const weekRange = getWeekRangeFromKey(weekKey);
+          if (weekRange) {
+            periodPromises.push(markDirtyPeriod('week', weekKey, weekRange.start, weekRange.end, 'system', null, ['loads']));
+            if (oldDoc.customer) {
+              periodPromises.push(markDirtyPeriod('week', weekKey, weekRange.start, weekRange.end, 'customer', oldDoc.customer, ['loads']));
+            }
+            if (oldDoc.carrier) {
+              periodPromises.push(markDirtyPeriod('week', weekKey, weekRange.start, weekRange.end, 'carrier', oldDoc.carrier, ['loads']));
+            }
+            if (oldDoc.createdBy) {
+              periodPromises.push(markDirtyPeriod('week', weekKey, weekRange.start, weekRange.end, 'user', oldDoc.createdBy, ['loads']));
+            }
+          }
+        }
+        
+        if (monthKey) {
+          const monthRange = getMonthRangeFromKey(monthKey);
+          if (monthRange) {
+            periodPromises.push(markDirtyPeriod('month', monthKey, monthRange.start, monthRange.end, 'system', null, ['loads']));
+            if (oldDoc.customer) {
+              periodPromises.push(markDirtyPeriod('month', monthKey, monthRange.start, monthRange.end, 'customer', oldDoc.customer, ['loads']));
+            }
+            if (oldDoc.carrier) {
+              periodPromises.push(markDirtyPeriod('month', monthKey, monthRange.start, monthRange.end, 'carrier', oldDoc.carrier, ['loads']));
+            }
+            if (oldDoc.createdBy) {
+              periodPromises.push(markDirtyPeriod('month', monthKey, monthRange.start, monthRange.end, 'user', oldDoc.createdBy, ['loads']));
+            }
+          }
+        }
+        
+        if (yearKey) {
+          const yearRange = getYearRangeFromKey(yearKey);
+          if (yearRange) {
+            periodPromises.push(markDirtyPeriod('year', yearKey, yearRange.start, yearRange.end, 'system', null, ['loads']));
+            if (oldDoc.customer) {
+              periodPromises.push(markDirtyPeriod('year', yearKey, yearRange.start, yearRange.end, 'customer', oldDoc.customer, ['loads']));
+            }
+            if (oldDoc.carrier) {
+              periodPromises.push(markDirtyPeriod('year', yearKey, yearRange.start, yearRange.end, 'carrier', oldDoc.carrier, ['loads']));
+            }
+            if (oldDoc.createdBy) {
+              periodPromises.push(markDirtyPeriod('year', yearKey, yearRange.start, yearRange.end, 'user', oldDoc.createdBy, ['loads']));
+            }
+          }
+        }
+        
+        Promise.all(periodPromises).catch((error) => {
+          console.error("[LoadController] Failed to mark dirty periods for status change:", error);
+        });
+      }
+
+      const oldCustomer = oldDoc.customer?.toString() || oldDoc.customer;
+      const newCustomer = updated.customer?.toString() || updated.customer;
+      const oldCarrier = oldDoc.carrier?.toString() || oldDoc.carrier;
+      const newCarrier = updated.carrier?.toString() || updated.carrier;
+      const oldCreatedBy = oldDoc.createdBy?.toString() || oldDoc.createdBy;
+      const newCreatedBy = updated.createdBy?.toString() || updated.createdBy;
+
+      if (datesToMark.length > 0) {
+        const promises = [];
+        
+        promises.push(markDirtyDays(datesToMark, 'system', null, ['loads']));
+        
+        if (oldCustomer) {
+          promises.push(markDirtyDays(datesToMark, 'customer', oldCustomer, ['loads']));
+        }
+        if (newCustomer && newCustomer !== oldCustomer) {
+          promises.push(markDirtyDays(datesToMark, 'customer', newCustomer, ['loads']));
+        }
+        
+        if (oldCarrier) {
+          promises.push(markDirtyDays(datesToMark, 'carrier', oldCarrier, ['loads']));
+        }
+        if (newCarrier && newCarrier !== oldCarrier) {
+          promises.push(markDirtyDays(datesToMark, 'carrier', newCarrier, ['loads']));
+        }
+        
+        if (oldCreatedBy) {
+          promises.push(markDirtyDays(datesToMark, 'user', oldCreatedBy, ['loads']));
+        }
+        if (newCreatedBy && newCreatedBy !== oldCreatedBy) {
+          promises.push(markDirtyDays(datesToMark, 'user', newCreatedBy, ['loads']));
+        }
+        
+        try {
+          await Promise.all(promises);
+        } catch (error) {
+          console.error("[LoadController] Failed to mark dirty for load update:", error);
+        }
       }
 
       // Применение DTO
-      const formattedDoc = this.dto ? this.dto.format(updated) : updated;
+      let formattedDoc = formatDocument(this.dto, updated);
+      formattedDoc = maybeStripPaymentFields(req.user?.role, formattedDoc);
 
       res.status(200).json({
         success: true,
         data: formattedDoc,
-        message: 'Load updated successfully'
+        message: "Load updated successfully",
       });
     } catch (error) {
-      this.handleError(res, error, 'Failed to update load');
+      this.handleError(res, error, "Failed to update load");
     }
   };
 
@@ -1288,10 +3107,12 @@ class LoadController extends UniversalBaseController {
     try {
       const { id } = req.params;
 
-      if (!mongoose.Types.ObjectId.isValid(id)) {
+      // Валидация ID
+      const idValidation = validateObjectId(id);
+      if (!idValidation.valid) {
         return res.status(400).json({
           success: false,
-          error: 'Invalid ID format'
+          error: idValidation.error,
         });
       }
 
@@ -1300,108 +3121,395 @@ class LoadController extends UniversalBaseController {
       if (!oldDoc) {
         return res.status(404).json({
           success: false,
-          error: 'Load not found'
+          error: "Load not found",
         });
       }
 
-      const loadData = req.body.load || req.body; // Поддержка вложенной структуры
+      const accessContext = await resolveAccessContext(req);
+      if (accessContext.error) {
+        return res.status(accessContext.error.status).json({
+          success: false,
+          error: accessContext.error.error
+        });
+      }
+      if (!canUpdateLoad(accessContext.role)) {
+        return res.status(403).json({
+          success: false,
+          error: "Access denied"
+        });
+      }
+      const canRead = await hasLoadReadAccess(accessContext, oldDoc);
+      if (!canRead) {
+        return res.status(403).json({
+          success: false,
+          error: "Access denied"
+        });
+      }
 
-      // Парсим JSON строки из form-data (если пришли через multipart/form-data)
-      const customerData = loadData.customer ? this.parseJsonField(loadData.customer) : null;
-      const carrierData = loadData.carrier ? this.parseJsonField(loadData.carrier) : null;
-      const typeData = loadData.type ? this.parseJsonField(loadData.type) : oldDoc.type;
-      
-      // Проверяем, был ли vehicle передан в запросе (для различения "не передан" и "передан null")
-      const vehicleWasProvided = 'vehicle' in loadData;
-      let vehicleData = vehicleWasProvided ? (loadData.vehicle ? this.parseJsonField(loadData.vehicle) : null) : undefined;
-      
-      // Проверяем, был ли freight передан в запросе
-      const freightWasProvided = 'freight' in loadData;
-      let freightData = freightWasProvided ? (loadData.freight ? this.parseJsonField(loadData.freight) : null) : undefined;
-      const pickupData = loadData.pickup ? this.parseJsonField(loadData.pickup) : null;
-      const deliveryData = loadData.delivery ? this.parseJsonField(loadData.delivery) : null;
-      const insuranceData = loadData.insurance ? this.parseJsonField(loadData.insurance) : null;
-      const datesData = loadData.dates ? this.parseJsonField(loadData.dates) : null;
+      // Парсим данные из запроса
+      let loadData;
+      try {
+        loadData = parseLoadData(req.body);
+      } catch (error) {
+        return res.status(400).json({
+          success: false,
+          error: "Invalid JSON in load field",
+          details: error.message,
+        });
+      }
 
-      // Определяем тип из обновленных данных или используем существующий
-      const currentType = typeData || oldDoc.type || { freight: false, vehicle: false };
+      loadData = filterLoadDataByRole(accessContext.role, loadData);
 
-      // Фильтрация null значений для freight, если тип freight (и нет vehicle)
-      // Только если freight был передан в запросе
-      if (freightWasProvided && currentType.freight && !currentType.vehicle && freightData) {
-        freightData = this.filterNullValues(freightData);
-        // Если после фильтрации freight пустой или shipment пустой, устанавливаем null
-        if (!freightData || 
-            (freightData.shipment && (!Array.isArray(freightData.shipment) || freightData.shipment.length === 0)) ||
-            (Object.keys(freightData).length === 0)) {
-          freightData = null;
+      // Валидируем данные
+      const customerData = validateCustomerData(loadData.customer);
+      const carrierData = validateCarrierData(loadData.carrier);
+      const typeData = loadData.type
+        ? parseJsonField(loadData.type)
+        : oldDoc.type;
+
+      const vehicleWasProvided =
+        loadData && typeof loadData === "object" && "vehicle" in loadData;
+      let vehicleData = vehicleWasProvided
+        ? validateVehicleData(loadData.vehicle, typeData || oldDoc.type)
+        : undefined;
+
+      const freightWasProvided =
+        loadData && typeof loadData === "object" && "freight" in loadData;
+      let freightData = freightWasProvided
+        ? validateFreightData(loadData.freight, typeData || oldDoc.type)
+        : undefined;
+
+      const pickupData = loadData.pickup
+        ? normalizeLocationAddress(parseJsonField(loadData.pickup))
+        : null;
+      const deliveryData = loadData.delivery
+        ? normalizeLocationAddress(parseJsonField(loadData.delivery))
+        : null;
+      const insuranceData = loadData.insurance
+        ? parseJsonField(loadData.insurance)
+        : null;
+      const datesData = loadData.dates ? parseJsonField(loadData.dates) : null;
+      // Парсим fees и tonu если они приходят как JSON строки
+      const feesData = loadData.fees !== undefined ? parseJsonField(loadData.fees) : undefined;
+      const tonuData = loadData.tonu !== undefined ? parseJsonField(loadData.tonu) : undefined;
+
+      if (accessContext.role === 'Pre-dispatcher') {
+        const customerId = getIdString(customerData?.id || loadData.customer);
+        if (customerId && !accessContext.allowedCustomerIds.includes(customerId)) {
+          return res.status(403).json({
+            success: false,
+            error: "Access denied"
+          });
+        }
+        if (!customerId && Object.prototype.hasOwnProperty.call(loadData, 'customer')) {
+          return res.status(403).json({
+            success: false,
+            error: "Access denied"
+          });
         }
       }
 
-      // Фильтрация null значений для vehicle, если тип vehicle (и нет freight)
-      // Только если vehicle был передан в запросе
-      if (vehicleWasProvided && currentType.vehicle && !currentType.freight && vehicleData) {
-        vehicleData = this.filterNullValues(vehicleData);
-        // Если после фильтрации vehicle пустой или shipment пустой, устанавливаем null
-        if (!vehicleData || 
-            (vehicleData.shipment && (!Array.isArray(vehicleData.shipment) || vehicleData.shipment.length === 0)) ||
-            (Object.keys(vehicleData).length === 0)) {
-          vehicleData = null;
+      if (accessContext.role === 'salesAgent') {
+        const customerId = getIdString(customerData?.id || loadData.customer);
+        const providedType = customerData?.type || loadData?.customer?.type;
+        if (providedType && providedType !== 'platform') {
+          return res.status(403).json({
+            success: false,
+            error: "Access denied"
+          });
         }
-      }
-
-      // Проверка уникальности VIN для vehicle (только если vin не null)
-      // Только если vehicle был передан и содержит данные
-      if (vehicleWasProvided && vehicleData && vehicleData.shipment && Array.isArray(vehicleData.shipment)) {
-        for (const shipment of vehicleData.shipment) {
-          if (shipment.vin && shipment.vin.trim() !== '') {
-            // Проверяем, существует ли уже Load с таким VIN (исключая текущий документ)
-            const existingLoad = await this.model.findOne({
-              'vehicle.shipment.vin': shipment.vin.trim(),
-              _id: { $ne: id } // Исключаем текущий документ при обновлении
+        if (!providedType && customerId) {
+          const customerDoc = await Customer.findById(customerId).select('type').lean();
+          if (!customerDoc || customerDoc.type !== 'platform') {
+            return res.status(403).json({
+              success: false,
+              error: "Access denied"
             });
-            
-            if (existingLoad) {
-              return res.status(400).json({
-                success: false,
-                error: 'Duplicate VIN',
-                message: `VIN "${shipment.vin.trim()}" already exists in another load (Order ID: ${existingLoad.orderId})`
-              });
-            }
+          }
+        }
+        if (!providedType && !customerId && Object.prototype.hasOwnProperty.call(loadData, 'customer')) {
+          return res.status(403).json({
+            success: false,
+            error: "Access denied"
+          });
+        }
+      }
+
+      // Нормализуем fees перед использованием
+      let normalizedFees = undefined;
+      if (feesData !== undefined) {
+        if (Array.isArray(feesData) && feesData.length > 0) {
+          normalizedFees = feesData
+            .filter(fee => fee && fee.type && fee.type.trim() !== '')
+            .map(fee => ({
+              type: fee.type || '',
+              carrierRate: fee.carrierRate !== undefined && fee.carrierRate !== null ? String(fee.carrierRate) : '',
+              customerRate: fee.customerRate !== undefined && fee.customerRate !== null ? String(fee.customerRate) : '',
+              total: fee.total !== undefined && fee.total !== null ? String(fee.total) : ''
+            }));
+        } else if (Array.isArray(feesData) && feesData.length === 0) {
+          normalizedFees = [];
+        }
+      }
+
+      // Добавляем нормализованные fees и tonu в loadData для prepareUpdateData
+      if (normalizedFees !== undefined) {
+        loadData.fees = normalizedFees;
+      }
+      if (tonuData !== undefined) {
+        loadData.tonu = tonuData;
+      }
+
+      // Validate dates
+      if (datesData && Object.keys(datesData).length > 0) {
+        const datesValidation = validateDatesData(datesData);
+        if (datesValidation && !datesValidation.valid) {
+          return res.status(400).json({
+            success: false,
+            error: 'Invalid dates data',
+            details: datesValidation.errors || datesValidation.error
+          });
+        }
+      }
+
+      // Validate fees
+      const freightType = typeData?.freight || oldDoc?.type?.freight;
+      if (normalizedFees && Array.isArray(normalizedFees) && normalizedFees.length > 0) {
+        const feesValidation = validateFeesData(normalizedFees, freightType);
+        if (feesValidation && !feesValidation.valid) {
+          return res.status(400).json({
+            success: false,
+            error: 'Invalid fees data',
+            details: feesValidation.errors || feesValidation.error
+          });
+        }
+      }
+
+      // Проверяем дубликаты VIN
+      if (vehicleWasProvided && vehicleData?.shipment?.length > 0) {
+        const vinCheck = await checkDuplicateVIN(this.model, vehicleData, id);
+        if (vinCheck) {
+          return res.status(400).json({
+            success: false,
+            error: vinCheck.error,
+            message: vinCheck.message,
+          });
+        }
+      }
+
+      // Обрабатываем customer и carrier
+      let customerId = oldDoc.customer;
+      if (customerData) {
+        customerId = await customerService.findOrCreate(customerData);
+      }
+
+      let carrierId = oldDoc.carrier;
+      if (carrierData) {
+        // Если есть старый carrier и в carrierData нет id, добавляем id для обновления
+        if (carrierId && !carrierData.id) {
+          carrierData.id = carrierId;
+        }
+        carrierId = await carrierService.findOrCreate(carrierData);
+      }
+
+      // Нормализуем emails
+      const { customerEmails, carrierEmails } = normalizeEmailsForLoad(loadData);
+
+      await Promise.all([
+        customerEmails.length > 0 && customerId
+          ? customerService.syncEmail(customerId, customerEmails[0])
+          : Promise.resolve(),
+      ]);
+
+      // Проверяем уникальность orderId перед обновлением (если изменяется)
+      if (loadData.orderId && loadData.orderId.trim() !== '') {
+        const newOrderId = loadData.orderId.trim();
+        if (newOrderId !== oldDoc.orderId) {
+          const existingLoad = await this.model.findOne({ 
+            orderId: newOrderId,
+            _id: { $ne: id }
+          }).select('_id orderId').lean();
+          if (existingLoad) {
+            return res.status(400).json({
+              success: false,
+              error: 'Duplicate order ID',
+              message: `Load with Order ID "${newOrderId}" already exists`
+            });
           }
         }
       }
 
-      // Обработка Customer
-      let customerId = oldDoc.customer;
-      if (customerData) {
-        customerId = await this.findOrCreateCustomer(customerData);
-      }
-
-      // Обработка Carrier
-      let carrierId = oldDoc.carrier;
-      if (carrierData) {
-        carrierId = await this.findOrCreateCarrier(carrierData);
-      }
+      const resetCarrierOnListed =
+        loadData.status === "Listed" && oldDoc.status !== "Listed";
 
       // Подготовка данных для обновления
       const updateData = {
-        ...(loadData.orderId && { orderId: loadData.orderId }),
+        // orderId - обновляем если передан (даже если пустой)
+        ...(loadData.orderId !== undefined && { orderId: loadData.orderId }),
+        // customer/carrier - обновляем если передан ID
         ...(customerId && { customer: customerId }),
-        ...(loadData.customerEmails && { customerEmails: loadData.customerEmails }),
-        ...(loadData.customerRate && { customerRate: loadData.customerRate }),
-        ...(typeData && { type: typeData }),
-        ...(pickupData && { pickup: pickupData }),
-        ...(deliveryData && { delivery: deliveryData }),
         ...(carrierId && { carrier: carrierId }),
-        ...(loadData.carrierEmails && { carrierEmails: loadData.carrierEmails }),
-        ...(loadData.carrierPhotos && { carrierPhotos: loadData.carrierPhotos }),
-        ...(insuranceData && { insurance: insuranceData }),
-        ...(loadData.status && { status: loadData.status }),
-        ...(datesData && { dates: datesData }),
-        ...(loadData.tracking !== undefined && { tracking: loadData.tracking }),
-        ...(loadData.documents && { documents: loadData.documents })
+        // customerEmails/carrierEmails - обновляем если передан (даже пустой массив для очистки)
+        ...(customerEmails !== undefined && { customerEmails }),
+        ...(carrierEmails !== undefined && { carrierEmails }),
+        // fees и tonu - обновляем если передан (даже пустой массив для очистки)
+        ...(normalizedFees !== undefined && { fees: normalizedFees }),
+        ...(tonuData !== undefined && { tonu: tonuData }),
+        // customerRate/carrierRate - обновляем если передан (даже если пустая строка или 0)
+        ...(loadData.customerRate !== undefined && { 
+          customerRate: loadData.customerRate === '' ? null : String(loadData.customerRate).trim() 
+        }),
+        ...(loadData.carrierRate !== undefined && { 
+          carrierRate: loadData.carrierRate === '' ? null : String(loadData.carrierRate).trim() 
+        }),
+        // type - обновляем если передан
+        ...(typeData && { type: typeData }),
+        // pickup - deep merge с существующими данными
+        ...(pickupData && {
+          pickup: (() => {
+            const mergedPickup = {
+              ...(oldDoc.pickup && typeof oldDoc.pickup === 'object' ? oldDoc.pickup.toObject ? oldDoc.pickup.toObject() : oldDoc.pickup : {}),
+              ...pickupData,
+              // Deep merge для address
+              ...(pickupData.address && {
+                address: {
+                  ...(oldDoc.pickup?.address && typeof oldDoc.pickup.address === 'object' 
+                    ? (oldDoc.pickup.address.toObject ? oldDoc.pickup.address.toObject() : oldDoc.pickup.address)
+                    : {}),
+                  ...pickupData.address
+                }
+              })
+            };
+            // Массив images: если присутствует в patch - использовать ([] для очистки, непустой массив для замены)
+            // Если НЕ присутствует (undefined) - НЕ добавлять в updateData (не трогать существующие)
+            if (loadData.pickup?.images !== undefined) {
+              mergedPickup.images = loadData.pickup.images;
+            }
+            return mergedPickup;
+          })()
+        }),
+        // delivery - deep merge с существующими данными
+        ...(deliveryData && {
+          delivery: (() => {
+            const mergedDelivery = {
+              ...(oldDoc.delivery && typeof oldDoc.delivery === 'object' ? oldDoc.delivery.toObject ? oldDoc.delivery.toObject() : oldDoc.delivery : {}),
+              ...deliveryData,
+              // Deep merge для address
+              ...(deliveryData.address && {
+                address: {
+                  ...(oldDoc.delivery?.address && typeof oldDoc.delivery.address === 'object'
+                    ? (oldDoc.delivery.address.toObject ? oldDoc.delivery.address.toObject() : oldDoc.delivery.address)
+                    : {}),
+                  ...deliveryData.address
+                }
+              })
+            };
+            // Массив images: если присутствует в patch - использовать ([] для очистки, непустой массив для замены)
+            // Если НЕ присутствует (undefined) - НЕ добавлять в updateData (не трогать существующие)
+            if (loadData.delivery?.images !== undefined) {
+              mergedDelivery.images = loadData.delivery.images;
+            }
+            return mergedDelivery;
+          })()
+        }),
+        // carrierPhotos - обновляем если передан (даже пустой массив для очистки)
+        ...(loadData.carrierPhotos !== undefined && {
+          carrierPhotos: loadData.carrierPhotos,
+        }),
+        // insurance - deep merge с существующими данными (1 уровень)
+        ...(insuranceData && {
+          insurance: {
+            ...(oldDoc.insurance && typeof oldDoc.insurance === 'object' ? oldDoc.insurance.toObject ? oldDoc.insurance.toObject() : oldDoc.insurance : {}),
+            ...insuranceData
+          }
+        }),
+        // status - обновляем если передан
+        ...(loadData.status !== undefined && { status: loadData.status }),
+        // dates - deep merge с существующими данными (1 уровень)
+        ...(datesData && {
+          dates: {
+            ...(oldDoc.dates && typeof oldDoc.dates === 'object' ? oldDoc.dates.toObject ? oldDoc.dates.toObject() : oldDoc.dates : {}),
+            ...datesData
+          }
+        }),
+        // tracking - обновляем если передан (даже если пустая строка для очистки)
+        ...(loadData.tracking !== undefined && { 
+          tracking: loadData.tracking === '' ? null : loadData.tracking 
+        }),
+        // notes - обновляем если передан (даже если пустая строка для очистки)
+        ...(loadData.notes !== undefined && { 
+          notes: loadData.notes === '' ? null : loadData.notes 
+        }),
+        ...(loadData.bolDocuments !== undefined && { bolDocuments: loadData.bolDocuments }),
+        ...(loadData.rateConfirmationDocuments !== undefined && { rateConfirmationDocuments: loadData.rateConfirmationDocuments }),
+        ...(loadData.documents !== undefined && { documents: loadData.documents }),
+        // Payment fields - allow empty strings to clear the field
+        ...(loadData.paymentMethod !== undefined && { 
+          paymentMethod: loadData.paymentMethod === '' ? null : loadData.paymentMethod 
+        }),
+        ...(loadData.paymentTerms !== undefined && { 
+          paymentTerms: loadData.paymentTerms === '' ? null : loadData.paymentTerms 
+        }),
+        // Independent copies of people for this specific load
+        // loadCarrierPeople - обновляем если передан (даже пустой массив для очистки)
+        ...(loadData.loadCarrierPeople !== undefined && {
+          loadCarrierPeople: Array.isArray(loadData.loadCarrierPeople)
+            ? loadData.loadCarrierPeople.filter(person => person && person.fullName && person.fullName.trim() !== '')
+            : []
+        }),
+        // loadCustomerRepresentativePeoples - обновляем если передан (даже пустой массив для очистки)
+        ...(loadData.loadCustomerRepresentativePeoples !== undefined && {
+          loadCustomerRepresentativePeoples: Array.isArray(loadData.loadCustomerRepresentativePeoples)
+            ? loadData.loadCustomerRepresentativePeoples.filter(person => person && person.fullName && person.fullName.trim() !== '')
+            : []
+        }),
       };
+
+      if (resetCarrierOnListed) {
+        carrierId = null;
+        loadData.carrier = null;
+        loadData.carrierEmails = [];
+        loadData.carrierPhotos = [];
+        loadData.bolDocuments = [];
+        loadData.rateConfirmationDocuments = [];
+        loadData.documents = [];
+        loadData.paymentMethod = '';
+        loadData.paymentTerms = '';
+        loadData.tracking = '';
+        loadData.insurance = null;
+        loadData.dates = {
+          assignedDate: '',
+          deadline: '',
+          pickupDate: '',
+          pickupDateStart: '',
+          pickupDateEnd: '',
+          pickupDateType: 'Exact',
+          deliveryDate: '',
+          deliveryDateStart: '',
+          deliveryDateEnd: '',
+          deliveryDateType: 'Exact',
+          aging: ''
+        };
+        loadData.fees = [];
+        loadData.tonu = { enabled: false };
+        loadData.pickup = { ...(loadData.pickup || {}), images: [] };
+        loadData.delivery = { ...(loadData.delivery || {}), images: [] };
+
+        // Preserve loadCarrierPeople and loadCustomerRepresentativePeoples before reset
+        // These are independent of carrier and should not be reset
+        const preservedLoadCarrierPeople = updateData.loadCarrierPeople;
+        const preservedLoadCustomerRepresentativePeoples = updateData.loadCustomerRepresentativePeoples;
+
+        Object.assign(updateData, getStep5ResetData(oldDoc));
+
+        // Restore preserved people data after reset
+        if (preservedLoadCarrierPeople !== undefined) {
+          updateData.loadCarrierPeople = preservedLoadCarrierPeople;
+        }
+        if (preservedLoadCustomerRepresentativePeoples !== undefined) {
+          updateData.loadCustomerRepresentativePeoples = preservedLoadCustomerRepresentativePeoples;
+        }
+      }
 
       // Добавляем vehicle только если он был передан в запросе
       // Если vehicleData === null (явно передан null), удаляем vehicle из документа
@@ -1409,173 +3517,611 @@ class LoadController extends UniversalBaseController {
       if (vehicleWasProvided) {
         if (vehicleData === null) {
           updateData.vehicle = null;
-        } else if (vehicleData && 
-                    vehicleData.shipment && 
-                    Array.isArray(vehicleData.shipment) && 
-                    vehicleData.shipment.length > 0) {
-          updateData.vehicle = vehicleData;
+        } else {
+          // Проверяем, присутствует ли vehicleImages в исходном loadData (до валидации)
+          const vehicleImagesInPatch = loadData.vehicle?.vehicleImages !== undefined 
+            ? loadData.vehicle.vehicleImages 
+            : (loadData.vehicle?.images !== undefined ? loadData.vehicle.images : undefined);
+          
+          // Обрабатываем vehicle если:
+          // 1. Есть shipment (обычный случай)
+          // 2. ИЛИ есть vehicleImages в patch (даже если shipment не передан - это обновление только изображений)
+          if (vehicleData?.shipment?.length > 0 || vehicleImagesInPatch !== undefined) {
+            // Deep merge с существующими данными vehicle
+            const existingVehicle = oldDoc.vehicle && typeof oldDoc.vehicle === 'object'
+              ? (oldDoc.vehicle.toObject ? oldDoc.vehicle.toObject() : oldDoc.vehicle)
+              : {};
+            
+            // Ensure vehicleImages exists (not images) - API sends vehicleImages
+            // If only images exists, convert to vehicleImages
+            if (vehicleData && vehicleData.images && !vehicleData.vehicleImages) {
+              vehicleData.vehicleImages = vehicleData.images;
+            }
+            
+            // Merge vehicle data (используем vehicleData если есть, иначе только существующие)
+            const mergedVehicle = vehicleData && vehicleData.shipment?.length > 0
+              ? {
+                  ...existingVehicle,
+                  ...vehicleData
+                }
+              : {
+                  ...existingVehicle
+                };
+            
+            // Массив vehicleImages: если присутствует в patch - использовать ([] для очистки, непустой массив для замены)
+            // Если НЕ присутствует (undefined) - НЕ добавлять в updateData (не трогать существующие)
+            if (vehicleImagesInPatch !== undefined) {
+              mergedVehicle.vehicleImages = vehicleImagesInPatch;
+            } else if (mergedVehicle.vehicleImages !== undefined) {
+              // Не трогать vehicleImages - удалить из mergedVehicle если он там есть
+              delete mergedVehicle.vehicleImages;
+            }
+            
+            // Sync for database (both fields needed in DB for backward compatibility)
+            // syncImageFields will create images from vehicleImages if needed
+            syncImageFields(mergedVehicle);
+            updateData.vehicle = mergedVehicle;
+          }
         }
       }
 
-      // Добавляем freight только если он был передан в запросе
-      // Если freightData === null (явно передан null), удаляем freight из документа
-      // Если freightData === undefined (не передан), не трогаем freight
       if (freightWasProvided) {
         if (freightData === null) {
           updateData.freight = null;
-        } else if (freightData && 
-                    freightData.shipment && 
-                    Array.isArray(freightData.shipment) && 
-                    freightData.shipment.length > 0) {
-          updateData.freight = freightData;
+        } else {
+          // Проверяем, присутствует ли freightImages в исходном loadData (до валидации)
+          const freightImagesInPatch = loadData.freight?.freightImages !== undefined 
+            ? loadData.freight.freightImages 
+            : (loadData.freight?.images !== undefined ? loadData.freight.images : undefined);
+          
+          // Обрабатываем freight если:
+          // 1. Есть shipment (обычный случай)
+          // 2. ИЛИ есть freightImages в patch (даже если shipment не передан - это обновление только изображений)
+          if (freightData?.shipment?.length > 0 || freightImagesInPatch !== undefined) {
+            // Deep merge с существующими данными freight
+            const existingFreight = oldDoc.freight && typeof oldDoc.freight === 'object'
+              ? (oldDoc.freight.toObject ? oldDoc.freight.toObject() : oldDoc.freight)
+              : {};
+            
+            // Ensure freightImages exists (not images) - API sends freightImages
+            // If only images exists, convert to freightImages
+            if (freightData && freightData.images && !freightData.freightImages) {
+              freightData.freightImages = freightData.images;
+            }
+            
+            // Merge freight data (используем freightData если есть, иначе только существующие)
+            const mergedFreight = freightData && freightData.shipment?.length > 0
+              ? {
+                  ...existingFreight,
+                  ...freightData
+                }
+              : {
+                  ...existingFreight
+                };
+            
+            // Массив freightImages: если присутствует в patch - использовать ([] для очистки, непустой массив для замены)
+            // Если НЕ присутствует (undefined) - НЕ добавлять в updateData (не трогать существующие)
+            if (freightImagesInPatch !== undefined) {
+              mergedFreight.freightImages = freightImagesInPatch;
+            } else if (mergedFreight.freightImages !== undefined) {
+              // Не трогать freightImages - удалить из mergedFreight если он там есть
+              delete mergedFreight.freightImages;
+            }
+            
+            // Sync for database (both fields needed in DB for backward compatibility)
+            // syncFreightFields will create images from freightImages if needed
+            syncFreightFields(mergedFreight);
+            updateData.freight = mergedFreight;
+          }
         }
       }
 
-      // Обработка загруженных файлов
-      if (req.uploadedFiles && req.uploadedFiles.length > 0) {
-        const existingDocuments = oldDoc.documents || [];
-        updateData.documents = [...existingDocuments, ...req.uploadedFiles];
+      // Обработка массивов изображений/документов согласно контракту:
+      // 1) Если поле НЕ отправлено в PATCH (undefined) => не трогать (удалить из updateData)
+      // 2) Если поле отправлено как [] => очистить (оставить [])
+      // 3) Если поле отправлено как непустой массив keys => заменить (оставить keys)
+      const imageArrayFields = {
+        'pickup.images': () => loadData.pickup?.images,
+        'delivery.images': () => loadData.delivery?.images,
+        'carrierPhotos': () => loadData.carrierPhotos,
+        'vehicle.vehicleImages': () => loadData.vehicle?.vehicleImages || loadData.vehicle?.images,
+        'freight.freightImages': () => loadData.freight?.freightImages || loadData.freight?.images,
+        'bolDocuments': () => loadData.bolDocuments,
+        'rateConfirmationDocuments': () => loadData.rateConfirmationDocuments,
+        'documents': () => loadData.documents
+      };
+
+      Object.keys(imageArrayFields).forEach(fieldPath => {
+        const getValue = imageArrayFields[fieldPath];
+        const patchValue = getValue();
+        
+        const parts = fieldPath.split('.');
+        let target = updateData;
+        
+        // Navigate to field location
+        for (let i = 0; i < parts.length - 1; i++) {
+          if (!target[parts[i]]) {
+            // Field not in updateData, skip
+            return;
+          }
+          target = target[parts[i]];
+        }
+        
+        const field = parts[parts.length - 1];
+        
+        // Если поле присутствует в updateData
+        if (field in target) {
+          // Если patchValue === undefined => удалить из updateData (не трогать существующие)
+          if (patchValue === undefined) {
+            delete target[field];
+            // Clean up empty parent objects
+            if (parts.length > 1) {
+              let parent = updateData;
+              for (let i = 0; i < parts.length - 2; i++) {
+                parent = parent[parts[i]];
+              }
+              if (parent && Object.keys(parent[parts[parts.length - 2]]).length === 0) {
+                delete parent[parts[parts.length - 2]];
+              }
+            }
+          }
+          // Если patchValue === [] => оставить [] (явная очистка)
+          // Если patchValue === array(keys) => оставить keys (замена)
+          // Эти случаи уже обработаны в updateData выше
+        }
+      });
+
+      // Find and delete removed files
+      const filesToDelete = processDeletedFiles(oldDoc, loadData);
+
+      if (filesToDelete.length > 0) {
+        deleteFromS3Multiple(filesToDelete)
+          .then((results) => {
+            const failCount = results.length - results.filter(r => r === undefined || (r && r.success !== false)).length;
+            if (failCount > 0) {
+              console.error(`[LoadController] Failed deletions:`, results.filter(r => r && r.success === false));
+            }
+          })
+          .catch((error) => {
+            console.error("[LoadController] Error deleting files from S3:", error);
+          });
       }
 
-      // Фильтруем все null и пустые значения из updateData перед обновлением
-      const cleanedUpdateData = this.filterNullValues(updateData);
+      // Distribute uploaded files by type
+      // ВАЖНО: upload НИКОГДА не должен привести к удалению старых ключей
+      // processUploadedFilesForUpdate делает merge: [...existing, ...newKeys]
+      processUploadedFilesForUpdate(updateData, oldDoc, req.uploadedFiles);
 
+      // Final cleanup: ensure vehicle/freight have correct structure
+      // Both fields will be synced for DB, but vehicleImages/freightImages are primary
+      if (updateData.vehicle?.vehicleImages) {
+        syncImageFields(updateData.vehicle);
+      }
+      if (updateData.freight?.freightImages) {
+        syncFreightFields(updateData.freight);
+      }
+
+      // Сохраняем важные поля перед filterNullValues (они могут быть пустыми строками для очистки)
+      const importantFields = {
+        paymentMethod: updateData.paymentMethod,
+        paymentTerms: updateData.paymentTerms,
+        customerRate: updateData.customerRate,
+        carrierRate: updateData.carrierRate,
+        tracking: updateData.tracking,
+        notes: updateData.notes,
+        orderId: updateData.orderId
+      };
+      
+      // Save fees, tonu, and people arrays before filtering
+      const fees = updateData.fees;
+      const tonu = updateData.tonu;
+      const loadCarrierPeople = updateData.loadCarrierPeople;
+      const loadCustomerRepresentativePeoples = updateData.loadCustomerRepresentativePeoples;
+      
+      const cleanedUpdateData = filterNullValues(updateData);
+      
+      // Восстанавливаем важные поля если они были переданы (даже если пустые)
+      Object.keys(importantFields).forEach(key => {
+        if (importantFields[key] !== undefined) {
+          // Convert empty strings to null for database
+          cleanedUpdateData[key] = importantFields[key] === '' ? null : importantFields[key];
+        }
+      });
+      
+      // Restore fees, tonu, and people arrays if they were provided
+      // IMPORTANT: These must be preserved even if filterNullValues removes them
+      if (fees !== undefined) {
+        if (Array.isArray(fees)) {
+          if (fees.length > 0) {
+            // Filter fees that have type, and normalize all fields (remove undefined/null)
+            cleanedUpdateData.fees = fees
+              .filter(fee => fee && fee.type && fee.type.trim() !== '')
+              .map(fee => {
+                // Ensure all fields are present, even if empty, but remove undefined/null
+                const normalizedFee = {
+                  type: fee.type || '',
+                  carrierRate: fee.carrierRate !== undefined && fee.carrierRate !== null ? String(fee.carrierRate) : '',
+                  customerRate: fee.customerRate !== undefined && fee.customerRate !== null ? String(fee.customerRate) : '',
+                  total: fee.total !== undefined && fee.total !== null ? String(fee.total) : ''
+                };
+                // Удаляем поля с undefined/null
+                Object.keys(normalizedFee).forEach(key => {
+                  if (normalizedFee[key] === undefined || normalizedFee[key] === null) {
+                    delete normalizedFee[key];
+                  }
+                });
+                return normalizedFee;
+              });
+          } else {
+            // Allow empty array to clear fees
+            cleanedUpdateData.fees = [];
+          }
+        }
+      }
+
+      if (tonu !== undefined && typeof tonu === 'object') {
+        // Удаляем undefined/null из tonu
+        const cleanedTonu = {};
+        if (tonu.enabled !== undefined && tonu.enabled !== null) {
+          cleanedTonu.enabled = tonu.enabled;
+        }
+        if (tonu.carrierRate !== undefined && tonu.carrierRate !== null && tonu.carrierRate !== '') {
+          cleanedTonu.carrierRate = String(tonu.carrierRate);
+        }
+        if (tonu.customerRate !== undefined && tonu.customerRate !== null && tonu.customerRate !== '') {
+          cleanedTonu.customerRate = String(tonu.customerRate);
+        }
+        if (Object.keys(cleanedTonu).length > 0) {
+          cleanedUpdateData.tonu = cleanedTonu;
+        } else if (tonu.enabled === false) {
+          // Сохраняем enabled: false даже если других полей нет
+          cleanedUpdateData.tonu = { enabled: false };
+        }
+      }
+
+      if (resetCarrierOnListed) {
+        // Preserve loadCarrierPeople and loadCustomerRepresentativePeoples before reset
+        // These are independent of carrier and should not be reset
+        const preservedLoadCarrierPeople2 = cleanedUpdateData.loadCarrierPeople;
+        const preservedLoadCustomerRepresentativePeoples2 = cleanedUpdateData.loadCustomerRepresentativePeoples;
+
+        Object.assign(cleanedUpdateData, getStep5ResetData(oldDoc));
+        cleanedUpdateData.carrier = null;
+        cleanedUpdateData.carrierEmails = [];
+        cleanedUpdateData.carrierPhotos = [];
+        cleanedUpdateData.bolDocuments = [];
+        cleanedUpdateData.rateConfirmationDocuments = [];
+        cleanedUpdateData.documents = [];
+        cleanedUpdateData.fees = [];
+        cleanedUpdateData.tonu = { enabled: false };
+        cleanedUpdateData.paymentMethod = null;
+        cleanedUpdateData.paymentTerms = null;
+        cleanedUpdateData.tracking = null;
+        cleanedUpdateData.insurance = null;
+
+        // Restore preserved people data after reset
+        if (preservedLoadCarrierPeople2 !== undefined) {
+          cleanedUpdateData.loadCarrierPeople = preservedLoadCarrierPeople2;
+        }
+        if (preservedLoadCustomerRepresentativePeoples2 !== undefined) {
+          cleanedUpdateData.loadCustomerRepresentativePeoples = preservedLoadCustomerRepresentativePeoples2;
+        }
+        cleanedUpdateData.carrierRate = null;
+      }
+      
       // Фильтруем только измененные поля (сравниваем с существующим документом)
       const filteredData = this.filterChangedFields(oldDoc, cleanedUpdateData);
       
+      // IMPORTANT: Ensure fees, tonu, and people arrays are included if they were in cleanedUpdateData
+      // filterChangedFields might skip them if comparison fails for arrays/objects
+      if (cleanedUpdateData.loadCarrierPeople !== undefined) {
+        filteredData.loadCarrierPeople = Array.isArray(cleanedUpdateData.loadCarrierPeople)
+          ? cleanedUpdateData.loadCarrierPeople.filter(person => person && person.fullName && person.fullName.trim() !== '')
+          : [];
+        console.log(`[LoadController.updateLoad] Added loadCarrierPeople to filteredData: ${filteredData.loadCarrierPeople.length} people`);
+      }
+      if (cleanedUpdateData.loadCustomerRepresentativePeoples !== undefined) {
+        filteredData.loadCustomerRepresentativePeoples = Array.isArray(cleanedUpdateData.loadCustomerRepresentativePeoples)
+          ? cleanedUpdateData.loadCustomerRepresentativePeoples.filter(person => person && person.fullName && person.fullName.trim() !== '')
+          : [];
+        console.log(`[LoadController.updateLoad] Added loadCustomerRepresentativePeoples to filteredData: ${filteredData.loadCustomerRepresentativePeoples.length} people`);
+      }
+      if (cleanedUpdateData.fees !== undefined) {
+        // Удаляем undefined/null из fees перед сохранением
+        if (Array.isArray(cleanedUpdateData.fees)) {
+          filteredData.fees = cleanedUpdateData.fees.map(fee => {
+            const cleanedFee = {};
+            if (fee.type !== undefined && fee.type !== null) cleanedFee.type = fee.type;
+            if (fee.carrierRate !== undefined && fee.carrierRate !== null) cleanedFee.carrierRate = fee.carrierRate;
+            if (fee.customerRate !== undefined && fee.customerRate !== null) cleanedFee.customerRate = fee.customerRate;
+            if (fee.total !== undefined && fee.total !== null) cleanedFee.total = fee.total;
+            return cleanedFee;
+          }).filter(fee => Object.keys(fee).length > 0);
+        } else {
+          filteredData.fees = cleanedUpdateData.fees;
+        }
+      }
+      if (cleanedUpdateData.tonu !== undefined) {
+        // Удаляем undefined/null из tonu перед сохранением
+        if (typeof cleanedUpdateData.tonu === 'object') {
+          const cleanedTonu = {};
+          if (cleanedUpdateData.tonu.enabled !== undefined && cleanedUpdateData.tonu.enabled !== null) {
+            cleanedTonu.enabled = cleanedUpdateData.tonu.enabled;
+          }
+          if (cleanedUpdateData.tonu.carrierRate !== undefined && cleanedUpdateData.tonu.carrierRate !== null) {
+            cleanedTonu.carrierRate = cleanedUpdateData.tonu.carrierRate;
+          }
+          if (cleanedUpdateData.tonu.customerRate !== undefined && cleanedUpdateData.tonu.customerRate !== null) {
+            cleanedTonu.customerRate = cleanedUpdateData.tonu.customerRate;
+          }
+          if (Object.keys(cleanedTonu).length > 0) {
+            filteredData.tonu = cleanedTonu;
+          }
+        } else {
+          filteredData.tonu = cleanedUpdateData.tonu;
+        }
+      }
+      
+      // Preserve people arrays before removeUndefinedNullValues
+      const preservedLoadCarrierPeople3 = filteredData.loadCarrierPeople;
+      const preservedLoadCustomerRepresentativePeoples3 = filteredData.loadCustomerRepresentativePeoples;
+
+      // Удаляем все остальные undefined/null значения из filteredData
+      const { removeUndefinedNullValues } = require('../utils/dataHelpers');
+      const finalData = removeUndefinedNullValues(filteredData);
+      
+      // Применяем очищенные данные
+      Object.keys(finalData).forEach(key => {
+        if (finalData[key] === undefined || finalData[key] === null) {
+          delete filteredData[key];
+        } else {
+          filteredData[key] = finalData[key];
+        }
+      });
+
+      // Restore people arrays after removeUndefinedNullValues
+      if (preservedLoadCarrierPeople3 !== undefined) {
+        filteredData.loadCarrierPeople = preservedLoadCarrierPeople3;
+        console.log(`[LoadController.updateLoad] Restored loadCarrierPeople after removeUndefinedNullValues: ${filteredData.loadCarrierPeople.length} people`);
+      }
+      if (preservedLoadCustomerRepresentativePeoples3 !== undefined) {
+        filteredData.loadCustomerRepresentativePeoples = preservedLoadCustomerRepresentativePeoples3;
+        console.log(`[LoadController.updateLoad] Restored loadCustomerRepresentativePeoples after removeUndefinedNullValues: ${filteredData.loadCustomerRepresentativePeoples.length} people`);
+      }
+
+      // Добавляем updatedBy если есть пользователь
+      if (req.user?.id) {
+        filteredData.updatedBy = req.user.id;
+      }
+
       // Если нет изменений, возвращаем существующую запись
       if (Object.keys(filteredData).length === 0) {
-        const formattedDoc = this.dto ? this.dto.format(oldDoc) : oldDoc;
+        let formattedDoc = formatDocument(this.dto, oldDoc);
+        formattedDoc = maybeStripPaymentFields(req.user?.role, formattedDoc);
         return res.status(200).json({
           success: true,
           data: formattedDoc,
-          message: 'No changes detected'
+          message: "No changes detected",
         });
       }
 
-      // Удаляем старый BOL PDF если он существует - ВРЕМЕННО ОТКЛЮЧЕНО для тестирования интеграции с UI
-      // if (oldDoc.bolPdfPath) {
-      //   try {
-      //     await pdfService.deletePDF(oldDoc.bolPdfPath);
-      //   } catch (deleteError) {
-      //     console.error('Error deleting old BOL PDF:', deleteError);
-      //   }
-      // }
-
-      // Обновление записи (только измененными полями)
-      const updated = await this.model.findByIdAndUpdate(
-        id,
-        filteredData,
-        { new: true, runValidators: true }
-      )
-      .populate('customer')
-      .populate('carrier')
-      .populate('createdBy');
-
-      // Обновляем связи в Customer и Carrier только если поле действительно изменилось
-      if (filteredData.customer !== undefined) {
-        const newCustomerId = filteredData.customer;
-        const oldCustomerId = oldDoc.customer;
+      // ВАЛИДАЦИЯ: Проверяем требования для статуса "Delivered"
+      const newStatus = filteredData.status !== undefined ? filteredData.status : oldDoc.status;
+      if (newStatus === "Delivered" && oldDoc.status !== "Delivered") {
+        const validationErrors = [];
         
-        // Удаляем старую связь
-        if (oldCustomerId) {
-          await Customer.findByIdAndUpdate(oldCustomerId, {
-            $pull: { loads: id }
-          });
-        }
-        // Добавляем новую связь (если не null)
-        if (newCustomerId) {
-          await Customer.findByIdAndUpdate(newCustomerId, {
-            $addToSet: { loads: id }
-          });
-        }
-      }
-
-      if (filteredData.carrier !== undefined) {
-        const newCarrierId = filteredData.carrier;
-        const oldCarrierId = oldDoc.carrier;
+        // Проверяем customer и customerRate (используем новые значения или старые)
+        const finalCustomerId = filteredData.customer !== undefined ? filteredData.customer : oldDoc.customer;
+        const finalCustomerRate = filteredData.customerRate !== undefined ? filteredData.customerRate : oldDoc.customerRate;
         
-        // Удаляем старую связь
-        if (oldCarrierId) {
-          await Carrier.findByIdAndUpdate(oldCarrierId, {
-            $pull: { loads: id }
+        if (!finalCustomerId) {
+          validationErrors.push({
+            field: "customer",
+            message: "Customer is required to set status to Delivered"
           });
         }
-        // Добавляем новую связь (если не null)
-        if (newCarrierId) {
-          await Carrier.findByIdAndUpdate(newCarrierId, {
-            $addToSet: { loads: id }
+        
+        const customerRate = parseFloat(finalCustomerRate) || 0;
+        if (!finalCustomerRate || customerRate <= 0) {
+          validationErrors.push({
+            field: "customerRate",
+            message: "Customer rate is required and must be greater than 0 to set status to Delivered"
+          });
+        }
+        
+        // Проверяем carrier и carrierRate (используем новые значения или старые)
+        const finalCarrierId = filteredData.carrier !== undefined ? filteredData.carrier : oldDoc.carrier;
+        const finalCarrierRate = filteredData.carrierRate !== undefined ? filteredData.carrierRate : oldDoc.carrierRate;
+        
+        if (!finalCarrierId) {
+          validationErrors.push({
+            field: "carrier",
+            message: "Carrier is required to set status to Delivered"
+          });
+        }
+        
+        const carrierRate = parseFloat(finalCarrierRate) || 0;
+        if (!finalCarrierRate || carrierRate <= 0) {
+          validationErrors.push({
+            field: "carrierRate",
+            message: "Carrier rate is required and must be greater than 0 to set status to Delivered"
+          });
+        }
+        
+        if (validationErrors.length > 0) {
+          return res.status(400).json({
+            success: false,
+            error: "Validation failed",
+            message: "Cannot set status to Delivered. Missing required fields.",
+            details: validationErrors
           });
         }
       }
 
-      // Регенерируем BOL PDF с обновленными данными - ВРЕМЕННО ОТКЛЮЧЕНО для тестирования интеграции с UI
-      // try {
-      //   const formattedLoadData = this.dto ? this.dto.format(updated) : updated;
-      //   const bolResult = await pdfService.generateBOL(formattedLoadData, updated._id.toString());
-      //   updated.bolPdfPath = bolResult.filename;
-      //   await updated.save();
-      // } catch (pdfError) {
-      //   console.error('Error regenerating BOL PDF during load update:', pdfError);
-      // }
+      // Use loadService for update with audit (centralized history logging)
+      const actor = createActor(req.user);
 
-      // Запись в историю изменений
-      if (this.historyModel) {
-        const changes = this.getChanges(oldDoc, loadData);
-        const userId = req.user?.id;
-        if (changes.length > 0 && userId) {
-          await this.createHistoryRecord(id, 'updated', userId, changes);
+      // Check if update triggers additional operations
+      const willCreatePayments =
+        filteredData.status === "Delivered" && oldDoc.status !== "Delivered";
+      
+      // Check if update triggers TONU payments creation (Cancelled status with TONU enabled)
+      // TONU может быть в filteredData (новое значение) или в oldDoc (уже было установлено)
+      const tonuEnabled = filteredData.tonu?.enabled !== undefined 
+        ? filteredData.tonu.enabled 
+        : (oldDoc.tonu?.enabled === true);
+      const willCreateTONUPayments =
+        filteredData.status === "Cancelled" && oldDoc.status !== "Cancelled" &&
+        tonuEnabled === true;
+
+      // Use loadService.updateLoad for centralized history logging
+      // Service now returns populated data, so no need for additional findById
+      try {
+        const updated = await loadService.updateLoad(id, filteredData, actor, {
+          useTransaction: willCreatePayments || willCreateTONUPayments, // Use transaction if creating payments
+          additionalOperations: willCreatePayments
+            ? async (session, updatedLoad) => {
+                // Create payments in the same transaction
+                // Если createPaymentsOnDelivered выбрасывает ошибку, транзакция откатится
+                await this.createPaymentsOnDelivered(
+                  updatedLoad,
+                  req.user?.id,
+                  session
+                );
+              }
+            : willCreateTONUPayments
+            ? async (session, updatedLoad) => {
+                // Create TONU payments in the same transaction
+                // Если createPaymentsOnCancelled выбрасывает ошибку, транзакция откатится
+                await this.createPaymentsOnCancelled(
+                  updatedLoad,
+                  req.user?.id,
+                  session
+                );
+              }
+            : null,
+        });
+
+        // Исправляем temp ключи если они есть (перемещаем файлы из temp папки в финальную)
+        const savedLoadDoc = await this.model.findById(id);
+        if (savedLoadDoc) {
+          await fixTempKeysInLoad(savedLoadDoc);
         }
-      }
 
-      // Send notification if status changed (non-blocking)
-      // Проверяем filteredData, так как это реально измененные поля
-      if (filteredData.status && filteredData.status !== oldDoc.status) {
-        notificationService.sendLoadStatusUpdate(updated, oldDoc.status, filteredData.status, req.user?.id)
-          .catch(error => {
-            console.error('[LoadController] Failed to send status update notification:', error);
+ 
+        // Обновляем связи Customer/Carrier
+        await updateCustomerCarrierLinks(
+          Customer,
+          Carrier,
+          oldDoc.customer,
+          filteredData.customer,
+          oldDoc.carrier,
+          filteredData.carrier,
+          id
+        );
+
+        // Синхронизируем платежи с Load, если они уже созданы и Load в статусе Delivered
+        if (updated && updated.status === "Delivered") {
+          // Загружаем Load с paymentReceivable и paymentPayable для синхронизации
+          const loadForSync = await this.model
+            .findById(id)
+            .populate("paymentReceivable")
+            .populate("paymentPayable")
+            .lean();
+          
+          if (loadForSync && (loadForSync.paymentReceivable || loadForSync.paymentPayable)) {
+            // Проверяем, были ли изменены поля, влияющие на платежи
+            const paymentRelatedFields = ['customerRate', 'carrierRate', 'fees', 'tonu', 'orderId'];
+            const hasPaymentChanges = Object.keys(filteredData).some(key => paymentRelatedFields.includes(key));
+            
+          if (hasPaymentChanges) {
+            await this.syncPaymentsWithLoad(loadForSync);
+          }
+          }
+        }
+
+        if (filteredData.status && filteredData.status !== oldDoc.status) {
+          notificationService
+            .sendLoadStatusUpdate(updated, oldDoc.status, filteredData.status, req.user?.id)
+            .catch((error) => {
+              console.error(
+                "[LoadController] Failed to send status update notification:",
+                error
+              );
+              console.error("[LoadController] Error stack:", error.stack);
+            });
+
+          if (filteredData.status === "Picked Up" && updated?.customer?.type === "platform") {
+            this.createReceivableOnPickedUpForPlatform(updated, req.user?.id)
+              .catch((error) => {
+                console.error("[LoadController] Failed to create receivable on picked up:", error);
+              });
+          }
+        }
+
+        // Only send load_updated notification (not status changes or assignments)
+        let formattedDoc = formatDocument(this.dto, updated);
+        formattedDoc = maybeStripPaymentFields(req.user?.role, formattedDoc);
+
+        res.status(200).json({
+          success: true,
+          data: formattedDoc,
+          message: "Load status updated successfully",
+        });
+      } catch (error) {
+        // Если ошибка при создании платежей, возвращаем понятное сообщение
+        if (willCreatePayments && error.message) {
+          return res.status(400).json({
+            success: false,
+            error: "Failed to create payment records",
+            message: error.message || "Cannot set status to Delivered. Payment creation failed.",
+            details: error.message
           });
+        }
+        // Для других ошибок используем стандартную обработку
+        this.handleError(res, error, "Failed to update load status");
       }
-
-      // Send notification if carrier was assigned (non-blocking)
-      // Проверяем filteredData для carrier
-      if (filteredData.carrier && filteredData.carrier.toString() !== oldDoc.carrier?.toString()) {
-        notificationService.sendLoadAssigned(updated, filteredData.carrier, req.user?.id)
-          .catch(error => {
-            console.error('[LoadController] Failed to send load assigned notification:', error);
-          });
-      }
-
-      // Создаем платежные записи при переходе в статус "Delivered"
-      if (filteredData.status === 'Delivered' && oldDoc.status !== 'Delivered') {
-        this.createPaymentsOnDelivered(updated, req.user?.id)
-          .catch(error => {
-            console.error('[LoadController] Failed to create payment records:', error);
-          });
-      }
-
-      // Применение DTO
-      const formattedDoc = this.dto ? this.dto.format(updated) : updated;
-
-      res.status(200).json({
-        success: true,
-        data: formattedDoc,
-        message: 'Load updated successfully'
-      });
     } catch (error) {
-      this.handleError(res, error, 'Failed to update load');
+      this.handleError(res, error, "Failed to update load status");
     }
-  };
+  }
 
   updateStatus = async (req, res) => {
     try {
       const { id } = req.params;
-      const { status } = req.body;
+      
+      // Поддерживаем оба формата: { status } или { load: { status, fees } }
+      let status, feesData;
+      if (req.body.load) {
+        // Формат: { load: { status, fees } }
+        status = req.body.load.status;
+        feesData = req.body.load.fees;
+      } else {
+        // Формат: { status, fees }
+        status = req.body.status;
+        feesData = req.body.fees;
+      }
+
+      if (!status) {
+        return res.status(400).json({
+          success: false,
+          error: "Validation failed",
+          details: [{ field: "status", message: "Status is required." }]
+        });
+      }
 
       if (!mongoose.Types.ObjectId.isValid(id)) {
         return res.status(400).json({
           success: false,
-          error: 'Invalid ID format'
+          error: "Invalid ID format",
+        });
+      }
+
+      // Security: Ensure req.user exists (from verifyToken middleware)
+      if (!req.user || !req.user.id) {
+        return res.status(401).json({
+          success: false,
+          error: "Authentication required",
         });
       }
 
@@ -1583,248 +4129,554 @@ class LoadController extends UniversalBaseController {
       if (!oldDoc) {
         return res.status(404).json({
           success: false,
-          error: 'Load not found'
+          error: "Load not found",
         });
       }
 
-      const updated = await this.model.findByIdAndUpdate(
-        id,
-        { 
-          status,
-          updatedBy: req.user?.id,
-          updatedAt: new Date()
-        },
-        { new: true }
-      )
-      .populate('customer')
-      .populate('carrier')
-      .populate('createdBy');
+      if (oldDoc.status === "Cancelled") {
+        return res.status(400).json({
+          success: false,
+          error: "Load is cancelled",
+          message: "Cancelled loads cannot be modified."
+        });
+      }
 
-      // Запись в историю (сохраняем изменение статуса)
-      if (this.historyModel) {
-        const userId = req.user?.id || updated.updatedBy;
-        if (userId) {
-          await this.createHistoryRecord(id, 'status_updated', userId, [{
-            field: 'status',
-            oldValue: oldDoc.status,
-            newValue: status
-          }]);
+      const skipPayableForDelivered = status === "Delivered"
+        ? await this.shouldSkipPayableForPlatformDelivered(oldDoc)
+        : false;
+
+      // ВАЛИДАЦИЯ: Проверяем требования для статуса "Delivered"
+      if (status === "Delivered") {
+        const validationErrors = [];
+        
+        // Проверяем наличие customer и customerRate
+        if (!oldDoc.customer) {
+          validationErrors.push({
+            field: "customer",
+            message: "Customer is required to set status to Delivered"
+          });
+        }
+
+        const customerRate = parseFloat(oldDoc.customerRate) || 0;
+        if (!oldDoc.customerRate || customerRate <= 0) {
+          validationErrors.push({
+            field: "customerRate",
+            message: "Customer rate is required and must be greater than 0 to set status to Delivered"
+          });
+        }
+        
+        // Проверяем наличие carrier и carrierRate
+        if (!skipPayableForDelivered) {
+        if (!oldDoc.carrier) {
+          validationErrors.push({
+            field: "carrier",
+            message: "Carrier is required to set status to Delivered"
+          });
+        }
+        
+        const carrierRate = parseFloat(oldDoc.carrierRate) || 0;
+        if (!oldDoc.carrierRate || carrierRate <= 0) {
+          validationErrors.push({
+            field: "carrierRate",
+            message: "Carrier rate is required and must be greater than 0 to set status to Delivered"
+          });
+          }
+        }
+        
+        if (validationErrors.length > 0) {
+          return res.status(400).json({
+            success: false,
+            error: "Validation failed",
+            message: "Cannot set status to Delivered. Missing required fields.",
+            details: validationErrors
+          });
         }
       }
 
-      // Send notification for status update (non-blocking)
-      if (status !== oldDoc.status) {
-        notificationService.sendLoadStatusUpdate(updated, oldDoc.status, status, req.user?.id)
-          .catch(error => {
-            console.error('[LoadController] Failed to send status update notification:', error);
-          });
+      // Парсим и валидируем fees если они переданы
+      let parsedFees = undefined;
+      if (feesData !== undefined) {
+        // Парсим fees (может быть строкой JSON или массивом)
+        parsedFees = parseJsonField(feesData);
+        
+        // Валидируем fees если они переданы
+        if (parsedFees !== null && parsedFees !== undefined) {
+          const freightType = oldDoc?.type?.freight;
+          if (Array.isArray(parsedFees) && parsedFees.length > 0) {
+            const feesValidation = validateFeesData(parsedFees, freightType);
+            if (feesValidation && !feesValidation.valid) {
+              return res.status(400).json({
+                success: false,
+                error: 'Invalid fees data',
+                details: feesValidation.errors || [{ field: "fees", message: feesValidation.error }]
+              });
+            }
+          } else if (!Array.isArray(parsedFees)) {
+            return res.status(400).json({
+              success: false,
+              error: 'Invalid fees data',
+              details: [{ field: "fees", message: "Fees must be an array" }]
+            });
+          }
+        }
       }
 
-      // Создаем платежные записи при переходе в статус "Delivered"
-      if (status === 'Delivered' && oldDoc.status !== 'Delivered') {
-        this.createPaymentsOnDelivered(updated, req.user?.id)
-          .catch(error => {
-            console.error('[LoadController] Failed to create payment records:', error);
+      const actor = createActor(req.user);
+
+      // Подготавливаем данные для обновления
+      const updateData = { status };
+      if (status === "Listed" && oldDoc.status !== "Listed") {
+        const resetData = getStep5ResetData(oldDoc);
+        Object.assign(updateData, resetData);
+
+        const filesToDelete = processDeletedFiles(oldDoc, resetData);
+        if (filesToDelete.length > 0) {
+          deleteFromS3Multiple(filesToDelete).catch((error) => {
+            console.error(
+              "[LoadController] Error deleting files from S3:",
+              error
+            );
           });
+        }
+      }
+      if (parsedFees !== undefined) {
+        // Нормализуем fees перед сохранением
+        if (Array.isArray(parsedFees) && parsedFees.length > 0) {
+          updateData.fees = parsedFees
+            .filter(fee => fee && fee.type && fee.type.trim() !== '')
+            .map(fee => ({
+              type: fee.type || '',
+              carrierRate: fee.carrierRate !== undefined && fee.carrierRate !== null ? String(fee.carrierRate) : '',
+              customerRate: fee.customerRate !== undefined && fee.customerRate !== null ? String(fee.customerRate) : '',
+              total: fee.total !== undefined && fee.total !== null ? String(fee.total) : ''
+            }));
+        } else {
+          updateData.fees = [];
+        }
       }
 
-      const formattedDoc = this.dto ? this.dto.format(updated) : updated;
+      const willCreatePayments =
+        status === "Delivered" && oldDoc.status !== "Delivered";
+
+      await loadService.updateLoad(id, updateData, actor, {
+        action: "status_update",
+        useTransaction: willCreatePayments,
+        additionalOperations: willCreatePayments
+          ? async (session, updatedLoad) => {
+              // Create payments in the same transaction
+              // Если createPaymentsOnDelivered выбрасывает ошибку, транзакция откатится
+              await this.createPaymentsOnDelivered(
+                updatedLoad,
+                req.user?.id,
+                session,
+                { skipPayable: skipPayableForDelivered }
+              );
+            }
+          : null,
+      });
+
+      const updated = await this.model
+        .findById(id)
+        .populate("customer")
+        .populate("carrier")
+        .populate("createdBy")
+        .populate("updatedBy");
+
+      // Only send load_updated notification (not status changes)
+
+      let formattedDoc = formatDocument(this.dto, updated);
+      formattedDoc = maybeStripPaymentFields(req.user?.role, formattedDoc);
+
+      if (oldDoc.status !== status) {
+        console.log(`[LoadController] Status changed from ${oldDoc.status} to ${status} for load ${id}`);
+        console.log(`[LoadController] Customer emails: ${updated?.customerEmails?.length || 0}, Carrier emails: ${updated?.carrierEmails?.length || 0}`);
+        console.log(`[LoadController] Customer emails array:`, updated?.customerEmails);
+        console.log(`[LoadController] Carrier emails array:`, updated?.carrierEmails);
+        console.log(`[LoadController] Updated document keys:`, Object.keys(updated?.toObject ? updated.toObject() : updated || {}));
+        
+        notificationService
+          .sendLoadStatusUpdate(updated, oldDoc.status, status, req.user?.id)
+          .catch((error) => {
+            console.error(
+              "[LoadController] Failed to send status update notification:",
+              error
+            );
+            console.error("[LoadController] Error stack:", error.stack);
+          });
+
+        const loadForEmail = updated.toObject ? updated.toObject() : updated;
+        if (!loadForEmail.customerEmails || loadForEmail.customerEmails.length === 0) {
+          loadForEmail.customerEmails = oldDoc.customerEmails || [];
+        }
+        if (!loadForEmail.carrierEmails || loadForEmail.carrierEmails.length === 0) {
+          loadForEmail.carrierEmails = oldDoc.carrierEmails || [];
+        }
+        
+        sendLoadDetailsEmail(loadForEmail, { 
+          isStatusUpdate: true, 
+          oldStatus: oldDoc.status, 
+          newStatus: status 
+        })
+          .then(() => {
+            console.log(`[LoadController] Status update email sent successfully for load ${id}`);
+          })
+          .catch((error) => {
+            console.error("[LoadController] Failed to send load status update email:", error);
+            console.error("[LoadController] Error stack:", error.stack);
+          });
+
+        if (status === "Picked Up" && updated?.customer?.type === "platform") {
+          this.createReceivableOnPickedUpForPlatform(updated, req.user?.id)
+            .catch((error) => {
+              console.error("[LoadController] Failed to create receivable on picked up:", error);
+            });
+        }
+      }
 
       res.status(200).json({
         success: true,
         data: formattedDoc,
-        message: 'Load status updated successfully'
+        message: "Load status updated successfully",
       });
     } catch (error) {
-      this.handleError(res, error, 'Failed to update load status');
+      this.handleError(res, error, "Failed to update load status");
+    }
+  };
+
+  duplicateLoad = async (req, res) => {
+    try {
+      const { id } = req.params;
+
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        return res.status(400).json({
+          success: false,
+          error: "Invalid ID format",
+        });
+      }
+
+      if (!req.user || !req.user.id) {
+        return res.status(401).json({
+          success: false,
+          error: "Authentication required",
+        });
+      }
+
+      const accessContext = await resolveAccessContext(req);
+      if (accessContext.error) {
+        return res.status(accessContext.error.status).json({
+          success: false,
+          error: accessContext.error.error
+        });
+      }
+      if (!canCreateLoad(accessContext.role) || accessContext.role === 'Pre-dispatcher') {
+        return res.status(403).json({
+          success: false,
+          error: "Access denied"
+        });
+      }
+
+      const original = await this.model.findById(id).lean();
+      if (!original) {
+        return res.status(404).json({
+          success: false,
+          error: "Load not found",
+        });
+      }
+
+      const canRead = await hasLoadReadAccess(accessContext, original);
+      if (!canRead) {
+        return res.status(403).json({
+          success: false,
+          error: "Access denied"
+        });
+      }
+
+      const originalOrderId = String(original.orderId || "Load");
+      let baseOrderId = originalOrderId;
+      const suffixMatch = originalOrderId.match(/^(.*)-(\d+)$/);
+      if (suffixMatch) {
+        const candidateBase = suffixMatch[1];
+        const baseExists = await this.model.exists({ orderId: candidateBase });
+        if (baseExists) {
+          baseOrderId = candidateBase;
+        }
+      }
+
+      const regex = new RegExp(`^${escapeRegex(baseOrderId)}-(\\d+)$`);
+      const existing = await this.model
+        .find({ orderId: { $regex: regex } })
+        .select("orderId")
+        .lean();
+
+      let maxSuffix = 0;
+      existing.forEach((doc) => {
+        const match = doc.orderId.match(regex);
+        if (match) {
+          const num = parseInt(match[1], 10);
+          if (!Number.isNaN(num)) {
+            maxSuffix = Math.max(maxSuffix, num);
+          }
+        }
+      });
+
+      const newOrderId = `${baseOrderId}-${maxSuffix + 1}`;
+
+      const duplicated = {
+        ...original,
+        orderId: newOrderId,
+        status: "Listed",
+        carrier: null,
+        carrierEmails: [],
+        carrierPhotos: [],
+        paymentMethod: null,
+        paymentTerms: null,
+        dates: {},
+        insurance: {},
+        paymentReceivable: null,
+        paymentPayable: null,
+        createdBy: req.user.id,
+        updatedBy: req.user.id,
+      };
+
+      delete duplicated._id;
+      delete duplicated.__v;
+      delete duplicated.createdAt;
+      delete duplicated.updatedAt;
+      delete duplicated.loadId;
+
+      const created = await this.model.create(duplicated);
+      const populated = await this.model
+        .findById(created._id)
+        .populate("customer")
+        .populate("carrier")
+        .populate("createdBy")
+        .populate("updatedBy");
+
+      let formattedDoc = formatDocument(this.dto, populated);
+      formattedDoc = maybeStripPaymentFields(req.user?.role, formattedDoc);
+
+      return res.status(201).json({
+        success: true,
+        data: formattedDoc,
+        message: "Load duplicated successfully",
+      });
+    } catch (error) {
+      this.handleError(res, error, "Failed to duplicate load");
+    }
+  };
+
+  delete = async (req, res) => {
+    try {
+      const { id } = req.params;
+
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        return res.status(400).json({
+          success: false,
+          error: "Invalid ID format"
+        });
+      }
+
+      const accessContext = await resolveAccessContext(req);
+      if (accessContext.error) {
+        return res.status(accessContext.error.status).json({
+          success: false,
+          error: accessContext.error.error
+        });
+      }
+      if (!ADMIN_ROLES.has(accessContext.role)) {
+        return res.status(403).json({
+          success: false,
+          error: "Access denied"
+        });
+      }
+
+      const load = await this.model.findById(id).select("_id customer createdBy");
+      if (!load) {
+        return res.status(404).json({
+          success: false,
+          error: "Load not found"
+        });
+      }
+
+      const canRead = await hasLoadReadAccess(accessContext, load);
+      if (!canRead) {
+        return res.status(403).json({
+          success: false,
+          error: "Access denied"
+        });
+      }
+
+      const loadForDelete = await this.model.findById(id)
+        .select('createdAt customer carrier createdBy')
+        .lean();
+
+      const actor = createActor(req.user);
+      await loadService.deleteLoad(id, actor);
+
+      if (loadForDelete) {
+        markDirtyForLoad(loadForDelete, ['loads'])
+          .catch((error) => {
+            console.error("[LoadController] Failed to mark dirty for load delete:", error);
+          });
+      }
+
+      res.status(200).json({
+        success: true,
+        message: "Load deleted successfully"
+      });
+    } catch (error) {
+      this.handleError(res, error, "Failed to delete load");
+    }
+  };
+
+  getAllLoadHistory = async (req, res) => {
+    try {
+      const limit = Math.min(parseInt(req.query.limit) || 10, 50);
+      const page = Math.max(1, parseInt(req.query.page) || 1);
+      const skip = (page - 1) * limit;
+      const action = req.query.action || '';
+      const userId = req.query.userId || '';
+      const loadId = req.query.loadId || '';
+      const orderId = (req.query.orderId || '').trim();
+      const dateFrom = req.query.dateFrom || '';
+      const dateTo = req.query.dateTo || '';
+
+      const query = {};
+      if (action) query.action = action;
+      if (userId && mongoose.Types.ObjectId.isValid(userId)) {
+        query['actor.actorId'] = new mongoose.Types.ObjectId(userId);
+      }
+      if (loadId && mongoose.Types.ObjectId.isValid(loadId)) {
+        query.load = new mongoose.Types.ObjectId(loadId);
+      }
+      if (orderId) {
+        const loads = await this.model.find({ orderId: new RegExp(orderId, 'i') }).select('_id').lean();
+        const loadIds = loads.map((l) => l._id);
+        if (loadIds.length === 0) {
+          const total = 0;
+          return res.status(200).json({
+            success: true,
+            data: [],
+            pagination: { total, totalPages: 0, currentPage: page, limit, skip },
+          });
+        }
+        query.load = loadIds.length === 1 ? loadIds[0] : { $in: loadIds };
+      }
+      if (dateFrom || dateTo) {
+        query.createdAt = query.createdAt || {};
+        if (dateFrom) query.createdAt.$gte = new Date(dateFrom);
+        if (dateTo) query.createdAt.$lte = new Date(dateTo);
+      }
+
+      const items = await LoadHistory.find(query)
+        .populate('actor.actorId', 'firstName lastName email companyName')
+        .populate('load', 'orderId billOfLadingNumber')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean();
+
+      const total = await LoadHistory.countDocuments(query);
+
+      res.status(200).json({
+        success: true,
+        data: items,
+        pagination: {
+          total,
+          totalPages: Math.ceil(total / limit),
+          currentPage: page,
+          limit,
+          skip,
+        },
+      });
+    } catch (error) {
+      this.handleError(res, error, 'Failed to fetch load history list');
     }
   };
 
   getLoadHistory = async (req, res) => {
     try {
       const { id } = req.params;
-      const { page = 1, limit = 10 } = req.query;
+      const limit = Math.min(parseInt(req.query.limit) || 50, 100);
+      const skip = parseInt(req.query.skip) || 0;
+      const page = parseInt(req.query.page) || 1;
+      const action = req.query.action || '';
+      const userId = req.query.userId || '';
+      const dateFrom = req.query.dateFrom || '';
+      const dateTo = req.query.dateTo || '';
 
       if (!mongoose.Types.ObjectId.isValid(id)) {
         return res.status(400).json({
           success: false,
-          error: 'Invalid ID format'
+          error: "Invalid ID format",
         });
       }
 
-      const history = await this.historyModel
-        .find({ loadId: id })
-        .populate('changedBy', 'firstName lastName email')
-        .sort({ createdAt: -1 })
-        .skip((page - 1) * limit)
-        .limit(parseInt(limit));
+      const load = await this.model.findById(id).select("_id customer createdBy");
+      if (!load) {
+        return res.status(404).json({
+          success: false,
+          error: "Load not found",
+        });
+      }
 
-      const total = await this.historyModel.countDocuments({ loadId: id });
+      const accessContext = await resolveAccessContext(req);
+      if (accessContext.error) {
+        return res.status(accessContext.error.status).json({
+          success: false,
+          error: accessContext.error.error
+        });
+      }
+      if (accessContext.role === 'partner') {
+        return res.status(403).json({
+          success: false,
+          error: "Access denied"
+        });
+      }
+      const canRead = await hasLoadReadAccess(accessContext, load);
+      if (!canRead) {
+        return res.status(403).json({
+          success: false,
+          error: "Access denied"
+        });
+      }
+
+      const historyQuery = { load: id };
+      if (action) historyQuery.action = action;
+      if (userId && mongoose.Types.ObjectId.isValid(userId)) {
+        historyQuery['actor.actorId'] = new mongoose.Types.ObjectId(userId);
+      }
+      if (dateFrom || dateTo) {
+        historyQuery.createdAt = {};
+        if (dateFrom) historyQuery.createdAt.$gte = new Date(dateFrom);
+        if (dateTo) historyQuery.createdAt.$lte = new Date(dateTo);
+      }
+
+      const [items, total] = await Promise.all([
+        LoadHistory.find(historyQuery)
+          .populate("actor.actorId", "firstName lastName email companyName")
+          .sort({ createdAt: -1 })
+          .skip(skip)
+          .limit(limit)
+          .lean(),
+        LoadHistory.countDocuments(historyQuery),
+      ]);
 
       res.status(200).json({
         success: true,
-        data: history,
+        data: items,
         pagination: {
           total,
           totalPages: Math.ceil(total / limit),
-          currentPage: parseInt(page),
-          limit: parseInt(limit)
-        }
+          currentPage: page,
+          limit,
+          skip,
+        },
       });
     } catch (error) {
-      this.handleError(res, error, 'Failed to fetch load history');
+      this.handleError(res, error, "Failed to fetch load history");
     }
   };
-
-  // PDF Inspection Method (for debugging) - ВРЕМЕННО ОТКЛЮЧЕНО для тестирования интеграции с UI
-  // inspectBOLFields = async (req, res) => {
-  //   try {
-  //     const result = await pdfService.inspectPDFFields('BOL');
-  //     res.status(200).json({
-  //       success: true,
-  //       data: result,
-  //       message: 'PDF fields inspected successfully'
-  //     });
-  //   } catch (error) {
-  //     this.handleError(res, error, 'Failed to inspect BOL PDF fields');
-  //   }
-  // };
-
-  // PDF Generation Methods - ВРЕМЕННО ОТКЛЮЧЕНО для тестирования интеграции с UI
-  // generateBOL = async (req, res) => {
-  //   try {
-  //     const { id } = req.params;
-
-  //     if (!mongoose.Types.ObjectId.isValid(id)) {
-  //       return res.status(400).json({
-  //         success: false,
-  //         error: 'Invalid ID format'
-  //       });
-  //     }
-
-  //     const load = await this.model.findById(id).populate('createdBy', 'firstName lastName email');
-      
-  //     if (!load) {
-  //       return res.status(404).json({
-  //         success: false,
-  //         error: 'Load not found'
-  //       });
-  //     }
-
-  //     const loadData = this.dto ? this.dto.format(load) : load;
-  //     const result = await pdfService.generateBOL(loadData);
-
-  //     res.status(200).json({
-  //       success: true,
-  //       data: result,
-  //       message: 'BOL generated successfully'
-  //     });
-  //   } catch (error) {
-  //     this.handleError(res, error, 'Failed to generate BOL');
-  //   }
-  // };
-
-  // generateRateConfirmation = async (req, res) => {
-  //   try {
-  //     const { id } = req.params;
-
-  //     if (!mongoose.Types.ObjectId.isValid(id)) {
-  //       return res.status(400).json({
-  //         success: false,
-  //         error: 'Invalid ID format'
-  //       });
-  //     }
-
-  //     const load = await this.model.findById(id).populate('createdBy', 'firstName lastName email');
-      
-  //     if (!load) {
-  //       return res.status(404).json({
-  //         success: false,
-  //         error: 'Load not found'
-  //       });
-  //     }
-
-  //     const loadData = this.dto ? this.dto.format(load) : load;
-  //     const result = await pdfService.generateRateConfirmation(loadData);
-
-  //     res.status(200).json({
-  //       success: true,
-  //       data: result,
-  //       message: 'Rate Confirmation generated successfully'
-  //     });
-  //   } catch (error) {
-  //     this.handleError(res, error, 'Failed to generate Rate Confirmation');
-  //   }
-  // };
-
-  // generateAllDocuments = async (req, res) => {
-  //   try {
-  //     const { id } = req.params;
-
-  //     if (!mongoose.Types.ObjectId.isValid(id)) {
-  //       return res.status(400).json({
-  //         success: false,
-  //         error: 'Invalid ID format'
-  //       });
-  //     }
-
-  //     const load = await this.model.findById(id).populate('createdBy', 'firstName lastName email');
-      
-  //     if (!load) {
-  //       return res.status(404).json({
-  //         success: false,
-  //         error: 'Load not found'
-  //       });
-  //     }
-
-  //     const loadData = this.dto ? this.dto.format(load) : load;
-  //     const result = await pdfService.generateAllDocuments(loadData);
-
-  //     res.status(200).json({
-  //       success: true,
-  //       data: result,
-  //       message: 'All documents generated successfully'
-  //     });
-  //   } catch (error) {
-  //     this.handleError(res, error, 'Failed to generate documents');
-  //   }
-  // };
-
-  // downloadPDF = async (req, res) => {
-  //   try {
-  //     const { filename } = req.params;
-  //     const pdfPath = path.join(__dirname, '../generated-pdfs', filename);
-
-  //     // Check if file exists
-  //     if (!fs.existsSync(pdfPath)) {
-  //       return res.status(404).json({
-  //         success: false,
-  //         error: 'PDF file not found'
-  //       });
-  //     }
-
-  //     // Set appropriate headers
-  //     res.setHeader('Content-Type', 'application/pdf');
-  //     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-
-  //     // Stream the file
-  //     const fileStream = fs.createReadStream(pdfPath);
-  //     fileStream.pipe(res);
-
-  //     fileStream.on('error', (error) => {
-  //       console.error('Error streaming PDF:', error);
-  //       if (!res.headersSent) {
-  //         res.status(500).json({
-  //           success: false,
-  //           error: 'Error streaming PDF file'
-  //         });
-  //       }
-  //     });
-  //   } catch (error) {
-  //     this.handleError(res, error, 'Failed to download PDF');
-  //   }
-  // };
 }
 
 module.exports = new LoadController();
-

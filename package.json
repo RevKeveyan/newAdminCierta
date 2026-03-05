@@ -4,7 +4,23 @@
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "start": "nodemon node app.js"
+    "start": "nodemon node app.js",
+    "generate-test-stats-data": "node scripts/generateTestStatisticsData.js",
+    "fix-payment-indexes": "node scripts/fixPaymentIndexes.js",
+    "fix-payment-links": "node scripts/fixPaymentLinks.js",
+    "fix-carrier-emails-index": "node scripts/fixCarrierEmailsIndex.js",
+    "fix-customer-emails-index": "node scripts/fixCustomerEmailsIndex.js",
+    "fix-representative-peoples-email-index": "node scripts/fixRepresentativePeoplesEmailIndex.js",
+    "fix-load-customer-representative-peoples-email-index": "node scripts/fixLoadCustomerRepresentativePeoplesEmailIndex.js",
+    "rebuild-stats": "node scripts/rebuildStatistics.js",
+    "check-notification-token": "node scripts/checkNotificationToken.js",
+    "fix-notification-token": "node scripts/fixNotificationToken.js",
+    "stats:dev:reset": "node scripts/statsDevReset.js --days=60",
+    "stats:dev:backfill": "node scripts/statsDevBackfill.js --days=60",
+    "test:stats": "node scripts/test_stats_quality.js",
+    "stats:update": "node scripts/update_stats_now.js --process",
+    "stats:update:today": "node scripts/update_stats_now.js --process",
+    "stats:update:date": "node scripts/update_stats_now.js"
   },
   "keywords": [],
   "author": "",
@@ -13,6 +29,7 @@
   "dependencies": {
     "@aws-sdk/client-s3": "^3.859.0",
     "@aws-sdk/s3-request-presigner": "^3.859.0",
+    "archiver": "^7.0.1",
     "axios": "^1.7.9",
     "bcrypt": "^5.1.1",
     "bcryptjs": "^3.0.2",

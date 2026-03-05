@@ -153,54 +153,170 @@ class PDFService {
         return false;
       };
 
-      // Map data to form fields with intelligent matching
-      // Driver/Carrier Name
-      setFieldByMatch(['drivername', 'carriername', 'carrier', 'driver'], data.driverName);
+      const fillShipmentTable = (items, totalWeight) => {
+        if (!data.isFreight || !items || items.length === 0) {
+          return;
+        }
+        
+        items.forEach((item, index) => {
+          const fieldIndex = index + 1;
+          const quantityFieldName = `quantity ${fieldIndex}`;
+          const descriptionFieldName = `description ${fieldIndex}`;
+          const weightFieldName = `weight ${fieldIndex}`;
+          
+          try {
+            const qtyField = form.getTextField(quantityFieldName);
+            if (qtyField) {
+              qtyField.setText('1');
+              console.log(`✓ Set ${quantityFieldName} to 1`);
+            }
+          } catch (e) {
+            console.warn(`Field "${quantityFieldName}" not found or not a text field`);
+          }
+          
+          try {
+            const descField = form.getTextField(descriptionFieldName);
+            if (descField && item.description && item.description.length > 0) {
+              const descriptionText = item.description.join('\n');
+              descField.setText(descriptionText);
+              console.log(`✓ Filled ${descriptionFieldName} with description`);
+            }
+          } catch (e) {
+            console.warn(`Field "${descriptionFieldName}" not found or not a text field`);
+          }
+          
+          try {
+            const weightField = form.getTextField(weightFieldName);
+            if (weightField) {
+              weightField.setText(String(item.weight));
+              console.log(`✓ Filled ${weightFieldName} with ${item.weight}`);
+            }
+          } catch (e) {
+            console.warn(`Field "${weightFieldName}" not found or not a text field`);
+          }
+        });
+        
+        try {
+          const totalWeightField = form.getTextField('total weight');
+          if (totalWeightField) {
+            totalWeightField.setText(String(totalWeight));
+            console.log(`✓ Filled total weight with ${totalWeight}`);
+          }
+        } catch (e) {
+          console.warn(`Field "total weight" not found`);
+        }
+      };
       
-      // Shipper (Pickup Location) - Name
-      setFieldByMatch(['shippername', 'shipper', 'pickupname', 'pickup name'], data.shipperName);
+      try {
+        const texte2Field = form.getTextField('Texte2');
+        if (texte2Field) {
+          texte2Field.setText('');
+          console.log(`✓ Filled Texte2 with empty string`);
+        }
+      } catch (e) {
+        setFieldByMatch(['texte2'], '');
+      }
       
-      // Shipper Address
-      setFieldByMatch(['shipperaddress', 'shipper address', 'pickupaddress', 'pickup address'], data.shipperAddress);
+      try {
+        const texte3Field = form.getTextField('Texte3');
+        if (texte3Field) {
+          texte3Field.setText(data.purchaseOrderNoWithPrefix || '');
+          console.log(`✓ Filled Texte3 (PO#) with: ${data.purchaseOrderNoWithPrefix}`);
+        }
+      } catch (e) {
+        setFieldByMatch(['texte3'], data.purchaseOrderNoWithPrefix);
+      }
       
-      // Shipper City/State/Zip
-      setFieldByMatch(['shippercity', 'shipper city', 'shippercitystatezip', 'pickupcity', 'pickup city'], data.shipperCityStateZip);
+      try {
+        const texte4Field = form.getTextField('Texte4');
+        if (texte4Field) {
+          texte4Field.setText(data.billOfLadingNo || '');
+          console.log(`✓ Filled Texte4 (Bill of Lading No) with: ${data.billOfLadingNo}`);
+        }
+      } catch (e) {
+        setFieldByMatch(['texte4', 'billofladingno', 'bill of lading', 'bolnumber', 'bol number', 'bol'], data.billOfLadingNo);
+      }
       
-      // Shipper SID
-      setFieldByMatch(['shippersid', 'shipper sid', 'shippersidnumber', 'pickupsid'], data.shipperSID);
+      try {
+        const texte6Field = form.getTextField('Texte6');
+        if (texte6Field) {
+          texte6Field.setText(data.carriersRefNo || '');
+          console.log(`✓ Filled Texte6 (Pickup# / Reference#) with: ${data.carriersRefNo}`);
+        }
+      } catch (e) {
+        setFieldByMatch(['texte6', 'carriersrefno', 'carrier ref', 'carriers ref', 'ref no'], data.carriersRefNo);
+      }
       
-      // Consignee (Customer + Delivery Location) - Name
-      setFieldByMatch(['consigneename', 'consignee', 'deliveryname', 'delivery name', 'customername'], data.consigneeName);
+      try {
+        const dateField = form.getTextField('Date');
+        if (dateField) {
+          dateField.setText(data.date || '');
+        }
+      } catch (e) {
+        setFieldByMatch(['date'], data.date);
+      }
       
-      // Consignee Address
-      setFieldByMatch(['consigneeaddress', 'consignee address', 'deliveryaddress', 'delivery address'], data.consigneeAddress);
+      if (data.isFreight && data.shipmentItems && data.shipmentItems.length > 0) {
+        fillShipmentTable(data.shipmentItems, data.totalWeight);
+      }
       
-      // Consignee City/State/Zip
-      setFieldByMatch(['consigneecity', 'consignee city', 'consigneecitystatezip', 'deliverycity', 'delivery city'], data.consigneeCityStateZip);
+      try {
+        const shipperNameField = form.getTextField("Shipper's name");
+        if (shipperNameField) {
+          const shipperText = `Name: ${data.shipperName || ''}\nAddress: ${data.shipperAddress || ''}\nCity/State/Zip: ${data.shipperCityStateZip || ''}\nSID#: ${data.shipperSID || ''}`;
+          shipperNameField.setText(shipperText);
+          console.log(`✓ Filled Shipper's name with multiline text`);
+        }
+      } catch (e) {
+        setFieldByMatch(['shippername', 'shipper', 'shipper name'], data.shipperName);
+        setFieldByMatch(['shipperaddress', 'shipper address'], data.shipperAddress);
+        setFieldByMatch(['shippercity', 'shipper city', 'shippercitystatezip'], data.shipperCityStateZip);
+        setFieldByMatch(['shippersid', 'shipper sid'], data.shipperSID);
+      }
       
-      // Consignee SID
-      setFieldByMatch(['consigneesid', 'consignee sid', 'consigneesidnumber', 'deliverysid'], data.consigneeSID);
+      try {
+        const consigneeField = form.getTextField('Consignee');
+        if (consigneeField) {
+          const consigneeText = `Name: ${data.consigneeName || ''}\nAddress: ${data.consigneeAddress || ''}\nCity/State/Zip: ${data.consigneeCityStateZip || ''}\nSID#: ${data.consigneeSID || ''}`;
+          consigneeField.setText(consigneeText);
+          console.log(`✓ Filled Consignee with multiline text`);
+        }
+      } catch (e) {
+        setFieldByMatch(['consigneename', 'consignee', 'consignee name'], data.consigneeName);
+        setFieldByMatch(['consigneeaddress', 'consignee address'], data.consigneeAddress);
+        setFieldByMatch(['consigneecity', 'consignee city', 'consigneecitystatezip'], data.consigneeCityStateZip);
+        setFieldByMatch(['consigneesid', 'consignee sid'], data.consigneeSID);
+      }
       
-      // Contact Information - Attention
-      setFieldByMatch(['attention', 'attn', 'contact'], data.attention);
+      try {
+        const carrierField = form.getTextField('Carrier');
+        if (carrierField) {
+          carrierField.setText(data.carrierName || '');
+          console.log(`✓ Filled Carrier with: ${data.carrierName}`);
+        }
+      } catch (e) {
+        setFieldByMatch(['drivername', 'carriername', 'carrier', 'driver', 'carrier name'], data.carrierName);
+      }
       
-      // Contact Information - Tel/Phone
-      setFieldByMatch(['tel', 'phone', 'telephone', 'phonenumber'], data.tel);
+      try {
+        const attentionField = form.getTextField('Attention');
+        if (attentionField) {
+          attentionField.setText(data.attention || '');
+          if (data.attention) console.log(`✓ Filled Attention with contact line`);
+        }
+      } catch (e) {
+        setFieldByMatch(['attention'], data.attention);
+      }
       
-      // Bill To
-      setFieldByMatch(['billto', 'bill to', 'billtoaddress'], data.billTo);
-      
-      // Purchase Order Number
-      setFieldByMatch(['purchaseorderno', 'purchase order', 'ponumber', 'po number', 'po'], data.purchaseOrderNo);
-      
-      // Bill of Lading Number
-      setFieldByMatch(['billofladingno', 'bill of lading', 'bolnumber', 'bol number', 'bol'], data.billOfLadingNo);
-      
-      // Dates - Pickup Date
-      setFieldByMatch(['pickupdate', 'pickup date', 'pick up date', 'shipperdate'], data.pickupDate);
-      
-      // Dates - Delivery Date
-      setFieldByMatch(['deliverydate', 'delivery date', 'carrierdate', 'consignedate'], data.deliveryDate);
+      try {
+        const telField = form.getTextField('Tel');
+        if (telField) {
+          telField.setText(data.tel || '');
+          if (data.tel) console.log(`✓ Filled Tel with: ${data.tel}`);
+        }
+      } catch (e) {
+        setFieldByMatch(['tel'], data.tel);
+      }
       
       // Log available fields for debugging (first time only)
       if (fields.length > 0 && process.env.NODE_ENV === 'development') {
@@ -219,41 +335,36 @@ class PDFService {
     }
   }
 
-  /**
-   * Generate Rate Confirmation PDF from Load data
-   */
   async generateRateConfirmation(loadData) {
     try {
-      const templatePath = path.join(this.templatesPath, 'Rate Confirmation - Sheet1 (1).pdf');
+      const templatePath = path.join(this.templatesPath, 'Rate Confirmation.pdf');
       const templateBytes = await fs.readFile(templatePath);
       const pdfDoc = await PDFDocument.load(templateBytes);
-      const pages = pdfDoc.getPages();
-      const firstPage = pages[0];
-      const { width, height } = firstPage.getSize();
-
-      // Load fonts
-      const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
-      const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
-
-      // Rate Confirmation Data mapping
-      const rateData = this.mapLoadToRateData(loadData);
-
-      // Fill Rate Confirmation fields
-      await this.fillRateConfirmationFields(firstPage, rateData, font, boldFont, width, height);
-
-      // Generate filename
-      const filename = `RateConfirmation_${loadData.vin}_${Date.now()}.pdf`;
+      const form = pdfDoc.getForm();
+      const hasFormFields = form.getFields().length > 0;
+      if (hasFormFields) {
+        const values = this.getRateConfirmationFormValues(loadData);
+        this.fillRateConfirmationFormFields(form, values);
+      } else {
+        const pages = pdfDoc.getPages();
+        const firstPage = pages[0];
+        const { width, height } = firstPage.getSize();
+        const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+        const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+        const rateData = this.mapLoadToRateData(loadData);
+        await this.fillRateConfirmationFields(firstPage, rateData, font, boldFont, width, height);
+      }
+      const identifier = loadData.orderId ?? loadData.id ?? loadData.vin ?? Date.now();
+      const filename = `RateConfirmation_${identifier}.pdf`;
       const outputPath = path.join(this.outputPath, filename);
-
-      // Save PDF
-      const pdfBytes = await pdfDoc.save();
+      const pdfBytes = await pdfDoc.save({ useObjectStreams: false });
       await fs.writeFile(outputPath, pdfBytes);
-
       return {
         success: true,
         filename,
         path: outputPath,
-        url: `/generated-pdfs/${filename}`
+        url: `/generated-pdfs/${filename}`,
+        hasFormFields
       };
     } catch (error) {
       console.error('Error generating Rate Confirmation:', error);
@@ -261,54 +372,378 @@ class PDFService {
     }
   }
 
+  async generateRateConfirmationTest() {
+    try {
+      const templatePath = path.join(this.templatesPath, 'Rate Confirmation - Sheet1 (1).pdf');
+      const templateBytes = await fs.readFile(templatePath);
+      const pdfDoc = await PDFDocument.load(templateBytes);
+      const pages = pdfDoc.getPages();
+      const firstPage = pages[0];
+      const { width, height } = firstPage.getSize();
+      const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+      const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+      const rateData = this.getTestRateData();
+      await this.fillRateConfirmationFields(firstPage, rateData, font, boldFont, width, height);
+      const filename = 'RateConfirmation_TEST.pdf';
+      const outputPath = path.join(this.outputPath, filename);
+      const pdfBytes = await pdfDoc.save();
+      await fs.writeFile(outputPath, pdfBytes);
+      return {
+        success: true,
+        filename,
+        path: outputPath,
+        url: `/generated-pdfs/${filename}`
+      };
+    } catch (error) {
+      console.error('Error generating Rate Confirmation test:', error);
+      throw new Error(`Failed to generate Rate Confirmation test: ${error.message}`);
+    }
+  }
+
+  getRateConfirmationFieldLabels() {
+    return [
+      'Order ID',
+      'Load created date',
+      'Carrier equipment type',
+      'Carrier company name',
+      'Carrier MC#',
+      'Carrier DOT#',
+      'Dispatcher Name / Phone',
+      'Driver Name / Phone',
+      'Pickup address',
+      'Pickup City, State, Zip',
+      'Created by email',
+      'Created by phone',
+      'Pickup date or range',
+      'Shipment dimensions (L, W, H)',
+      'Shipment commodity',
+      'Shipment weight + lbs',
+      'Total weight + lbs',
+      'Payment method',
+      'Carrier rate + $',
+      'Pickup locationName',
+      'Delivery locationName',
+      'Delivery address',
+      'Delivery City, State, Zip',
+      'Created by email',
+      'Created by phone',
+      'Delivery date or range',
+      'Carrier DBA',
+      'Shipment units (N/A or empty)',
+      'Shipment units sum or Truckload',
+      'Special requirements of shipment'
+    ];
+  }
+
+  getRateConfirmationFormValues(load) {
+    const people = Array.isArray(load.loadCarrierPeople) ? load.loadCarrierPeople : [];
+    const roleMatches = (p, role) => (p.role || p.type || '').toString().toLowerCase() === role.toLowerCase();
+    const dispatcher = people.filter(p => roleMatches(p, 'Dispatcher'))[0];
+    const driver = people.filter(p => roleMatches(p, 'Driver'))[0];
+    const dispatcherStr = dispatcher ? [dispatcher.fullName, dispatcher.phoneNumber].filter(Boolean).join(' / ') : '';
+    const driverStr = driver ? [driver.fullName, driver.phoneNumber].filter(Boolean).join(' / ') : '';
+    const pickupAddr = load.pickup?.address || {};
+    const deliveryAddr = load.delivery?.address || {};
+    const pickupCityStateZip = [pickupAddr.city, pickupAddr.state, pickupAddr.zipCode].filter(Boolean).join(', ');
+    const deliveryCityStateZip = [deliveryAddr.city, deliveryAddr.state, deliveryAddr.zipCode].filter(Boolean).join(', ');
+    const shipment = load.type?.freight && load.freight?.shipment ? load.freight.shipment : [];
+    const carrier = load.carrier && typeof load.carrier === 'object' ? load.carrier : {};
+    const equipmentStr = Array.isArray(carrier.equipmentType) ? carrier.equipmentType.join(', ') : (carrier.equipmentType || '');
+
+    const formatPickupDate = () => {
+      const exact = load.dates?.pickupDate || load.pickup?.date || load.dates?.pickupAt;
+      if (exact) return this.formatDate(exact);
+      const start = load.dates?.pickupDateStart;
+      const end = load.dates?.pickupDateEnd;
+      if (start && end) return `${this.formatDate(start)} - ${this.formatDate(end)}`;
+      if (start) return this.formatDate(start);
+      return '';
+    };
+    const formatDeliveryDate = () => {
+      const exact = load.dates?.deliveryDate || load.delivery?.date || load.dates?.deliveryAt;
+      if (exact) return this.formatDate(exact);
+      const start = load.dates?.deliveryDateStart;
+      const end = load.dates?.deliveryDateEnd;
+      if (start && end) return `${this.formatDate(start)} - ${this.formatDate(end)}`;
+      if (start) return this.formatDate(start);
+      return '';
+    };
+
+    const dimensionsLines = shipment.map(s => {
+      const parts = [s.dimensionsLength, s.dimensionsWidth, s.dimensionsHeight].filter(Boolean);
+      return parts.length ? parts.join(' x ') : '';
+    }).filter(Boolean);
+    const commodityLines = shipment.map(s => s.commodity || '').filter(s => s !== '');
+    const weightLines = shipment.map(s => (s.weight != null && s.weight !== '') ? `${String(s.weight)} lbs` : '').filter(Boolean);
+    const totalWeight = shipment.reduce((sum, s) => sum + (parseFloat(s.weight) || 0), 0);
+    const totalWeightStr = totalWeight ? `${totalWeight} lbs` : '';
+
+    const units = shipment.map(s => (s.shipmentUnits != null && s.shipmentUnits !== '') ? String(s.shipmentUnits).trim() : null).filter(Boolean);
+    const hasFTL = units.some(u => u.toUpperCase() === 'FTL');
+    const hasNA = units.some(u => u.toUpperCase() === 'N/A');
+    const numericUnits = units.filter(u => {
+      const n = parseInt(u, 10);
+      return !Number.isNaN(n) && n >= 1 && n <= 200;
+    });
+    let field28 = '';
+    let field29 = '';
+    if (hasFTL) {
+      field28 = '';
+      field29 = 'Truckload';
+    } else if (hasNA && numericUnits.length === 0) {
+      field28 = 'N/A';
+      field29 = '';
+    } else if (numericUnits.length > 0) {
+      field28 = '';
+      field29 = String(numericUnits.reduce((sum, u) => sum + parseInt(u, 10), 0));
+    }
+
+    const creator = load.createdBy && typeof load.createdBy === 'object' ? load.createdBy : null;
+    const creatorEmail = creator?.email || '';
+    const creatorPhone = creator?.phoneNumber || '';
+
+    return [
+      load.orderId?.toString() || '',
+      load.createdAt ? this.formatDate(load.createdAt) : '',
+      equipmentStr,
+      carrier.name || '',
+      carrier.mcNumber || '',
+      carrier.dotNumber || '',
+      dispatcherStr,
+      driverStr,
+      pickupAddr.address || '',
+      pickupCityStateZip,
+      creatorEmail,
+      creatorPhone,
+      formatPickupDate(),
+      dimensionsLines.join('\n'),
+      commodityLines.join('\n'),
+      weightLines.join('\n'),
+      totalWeightStr,
+      load.paymentMethod || '',
+      load.carrierRate != null && load.carrierRate !== '' ? `$${String(load.carrierRate)}` : '',
+      load.pickup?.locationName || '',
+      load.delivery?.locationName || '',
+      deliveryAddr.address || '',
+      deliveryCityStateZip,
+      creatorEmail,
+      creatorPhone,
+      formatDeliveryDate(),
+      carrier.dba || '',
+      field28,
+      field29,
+      (load.vehicle?.specialRequirements || load.pickup?.notes || load.delivery?.notes || load.notes || '').trim()
+    ];
+  }
+
+  async generateRateConfirmationFieldMap() {
+    const templatePath = path.join(this.templatesPath, 'Rate Confirmation.pdf');
+    const templateBytes = await fs.readFile(templatePath);
+    const pdfDoc = await PDFDocument.load(templateBytes);
+    const form = pdfDoc.getForm();
+    const fields = form.getFields();
+    const labels = this.getRateConfirmationFieldLabels();
+    const mapping = fields.map((f, i) => {
+      const source = this.getRateConfirmationSourceForIndex(i);
+      return {
+        index: i + 1,
+        fieldName: f.getName(),
+        label: labels[i] || `Field ${i + 1}`,
+        variable: source
+      };
+    });
+    fields.forEach((field, index) => {
+      const type = field.constructor.name;
+      const name = field.getName();
+      const source = this.getRateConfirmationSourceForIndex(index);
+      const value = `[#${index + 1}] PDF: ${name} => Variable: ${source}`;
+      try {
+        if (type === 'PDFTextField') field.setText(value);
+      } catch (e) {
+        console.warn(`Could not set field "${name}":`, e.message);
+      }
+    });
+    const filename = 'RateConfirmation_FIELD_MAP.pdf';
+    const outputPath = path.join(this.outputPath, filename);
+    const pdfBytes = await pdfDoc.save({ useObjectStreams: false });
+    await fs.writeFile(outputPath, pdfBytes);
+    return {
+      success: true,
+      filename,
+      path: outputPath,
+      totalFields: fields.length,
+      mapping
+    };
+  }
+
+  getRateConfirmationSourceForIndex(index) {
+    const sources = [
+      'load.orderId',
+      'load.createdAt',
+      'load.carrier.equipmentType',
+      'load.carrier.name',
+      'load.carrier.mcNumber',
+      'load.carrier.dotNumber',
+      'loadCarrierPeople dispatcher: fullName / phoneNumber',
+      'loadCarrierPeople driver: fullName / phoneNumber',
+      'load.pickup.address.address',
+      'load.pickup.address city, state, zipCode',
+      'createdBy.email',
+      'createdBy.phoneNumber',
+      'load.dates.pickupDate or pickupDateStart-pickupDateEnd',
+      'load.freight.shipment[] dimensions (L, W, H) newline-separated',
+      'load.freight.shipment[].commodity newline-separated',
+      'load.freight.shipment[].weight + lbs newline-separated',
+      'sum(load.freight.shipment[].weight) + lbs',
+      'load.paymentMethod',
+      'load.carrierRate with $ prefix',
+      'load.pickup.locationName',
+      'load.delivery.locationName',
+      'load.delivery.address.address',
+      'load.delivery.address city, state, zipCode',
+      'createdBy.email',
+      'createdBy.phoneNumber',
+      'load.dates.deliveryDate or deliveryDateStart-deliveryDateEnd',
+      'load.carrier.dba',
+      'shipmentUnits: N/A or empty',
+      'shipmentUnits: sum or Truckload or empty',
+      'load.vehicle.specialRequirements or pickup/delivery/load notes'
+    ];
+    return sources[index] != null ? sources[index] : `value at index ${index}`;
+  }
+
+  fillRateConfirmationFormFields(form, values) {
+    const fields = form.getFields();
+    (values || []).forEach((val, index) => {
+      if (index >= fields.length) return;
+      const field = fields[index];
+      try {
+        if (field.constructor.name === 'PDFTextField') {
+          field.setText(String(val != null ? val : ''));
+        }
+      } catch (e) {
+        console.warn(`Could not set field ${index + 1}:`, e.message);
+      }
+    });
+  }
+
   /**
    * Map Load data to BOL format - only required fields
+   * Uses current Load structure: load.pickup, load.delivery, load.freight.shipment[]
    */
   mapLoadToBOLData(load) {
-    // Format pickup location (Shipper)
-    const pickupLocation = load.pickUpLocation || {};
-    const shipperName = pickupLocation.name || '';
-    const shipperAddress = pickupLocation.address || '';
-    const shipperCityStateZip = this.formatCityStateZip(pickupLocation);
-    const shipperSID = pickupLocation.loc || ''; // SID# from loc field
+    const isFreight = load.type?.freight === true;
     
-    // Format delivery location (Consignee)
-    const deliveryLocation = load.deliveryLocation || {};
-    const consigneeName = load.customerCompanyName || '';
-    const consigneeAddress = deliveryLocation.address || '';
-    const consigneeCityStateZip = this.formatCityStateZip(deliveryLocation);
-    const consigneeSID = deliveryLocation.loc || ''; // SID# from loc field
+    const poNumbers = isFreight && load.freight?.shipment
+      ? load.freight.shipment
+          .map(item => item.poNumber)
+          .filter(Boolean)
+      : [];
     
-    // Phone number (from pickup or delivery location)
-    const phoneNumber = pickupLocation.contactPhone || deliveryLocation.contactPhone || '';
+    const purchaseOrderNo = poNumbers.length > 0
+      ? poNumbers.join(', ')
+      : '';
     
-    // Format dates
-    const pickupDate = load.pickUpDate ? this.formatDate(load.pickUpDate) : '';
-    const deliveryDate = load.deliveryDate ? this.formatDate(load.deliveryDate) : '';
+    const purchaseOrderNoWithPrefix = poNumbers.length > 0
+      ? poNumbers.map(po => `PO#: ${po}`).join(', ')
+      : '';
+    
+    const billOfLadingNo = load.orderId?.toString() || '';
+    
+    const pickupNumbers = isFreight && load.freight?.shipment
+      ? load.freight.shipment
+          .map(item => item.pickupNumber)
+          .filter(Boolean)
+      : [];
+    
+    const deliveryReferences = isFreight && load.freight?.shipment
+      ? load.freight.shipment
+          .map(item => item.deliveryReference)
+          .filter(Boolean)
+      : [];
+    
+    const pickupNumbersWithPrefix = pickupNumbers.length > 0
+      ? pickupNumbers.map(pn => `Pickup#: ${pn}`).join(', ')
+      : '';
+    
+    const deliveryReferencesWithPrefix = deliveryReferences.length > 0
+      ? deliveryReferences.map(dr => `Reference#: ${dr}`).join(', ')
+      : '';
+    
+    const carriersRefNo = [
+      pickupNumbersWithPrefix,
+      deliveryReferencesWithPrefix
+    ].filter(Boolean).join(' / ') || '';
+    
+    const shipmentItems = isFreight && load.freight?.shipment
+      ? load.freight.shipment.map((item, index) => ({
+          index: index,
+          quantity: load.freight.shipment.length,
+          description: [
+            item.commodity || '',
+            `${item.dimensionsLength || ''} x ${item.dimensionsWidth || ''} x ${item.dimensionsHeight || ''}`
+          ].filter(Boolean),
+          weight: item.weight || '',
+        }))
+      : [];
+    
+    const totalWeight = shipmentItems.reduce((sum, item) => {
+      const weight = parseFloat(item.weight) || 0;
+      return sum + weight;
+    }, 0);
+    
+    const shipperName = load.delivery?.locationName || '';
+    const shipperAddress = load.delivery?.address?.address || '';
+    const shipperCity = load.delivery?.address?.city || '';
+    const shipperState = load.delivery?.address?.state || '';
+    const shipperZip = load.delivery?.address?.zipCode || '';
+    const shipperCityStateZip = [
+      shipperCity,
+      shipperState,
+      shipperZip
+    ].filter(Boolean).join(', ') || '';
+    
+    const consigneeName = load.pickup?.locationName || '';
+    const consigneeAddress = load.pickup?.address?.address || '';
+    const consigneeCity = load.pickup?.address?.city || '';
+    const consigneeState = load.pickup?.address?.state || '';
+    const consigneeZip = load.pickup?.address?.zipCode || '';
+    const consigneeCityStateZip = [
+      consigneeCity,
+      consigneeState,
+      consigneeZip
+    ].filter(Boolean).join(', ') || '';
+    
+    const carrierName = load.carrier?.name || '';
+    
+    const user = load.createdBy && typeof load.createdBy === 'object' ? load.createdBy : null;
+    const attention = user?.email ? `For any questions Contact: ${user.email}` : '';
+    const tel = user?.phoneNumber || '';
     
     return {
-      // Driver/Carrier
-      driverName: load.carrier?.name || '',
+      purchaseOrderNo,
+      purchaseOrderNoWithPrefix,
+      billOfLadingNo,
+      date: '',
+      carriersRefNo,
       
+      shipmentItems,
+      totalWeight,
+      isFreight,
+      
+      shipperName,
       shipperAddress,
       shipperCityStateZip,
-      shipperSID,
+      shipperSID: '',
       
       consigneeName,
       consigneeAddress,
       consigneeCityStateZip,
-      consigneeSID,
+      consigneeSID: '',
       
-      attention: 'For any questions Contact: offers@ciertacorp.com',
-      tel: phoneNumber,
-      
-      billTo: 'CIERTA CORPORATION\n710 E MAIN ST\nLEXINGTON, KY 40502\nAccounting@ciertacorp.com',
-      
-      purchaseOrderNo: load.orderId?.toString() || '',
-      billOfLadingNo: load.orderId?.toString() || '',
-      
-      pickupDate,
-      deliveryDate
+      carrierName,
+      attention,
+      tel
     };
   }
   
@@ -337,39 +772,88 @@ class PDFService {
     });
   }
 
-  /**
-   * Map Load data to Rate Confirmation format
-   */
-  mapLoadToRateData(load) {
+  getTestRateData() {
     return {
-      // Rate Information
-      rateNumber: load.id?.toString().slice(-8) || 'N/A',
-      vin: load.vin || 'N/A',
-      vehicleType: load.type || 'N/A',
-      
-      customerCompany: load.customerCompanyName || 'N/A',
-      customerEmails: Array.isArray(load.customerEmails) ? load.customerEmails.join(', ') : 'N/A',
-      
-      carrierName: load.carrier?.name || 'N/A',
-      carrierMC: load.carrier?.mcNumber || 'N/A',
-      carrierContact: load.carrier?.contact || 'N/A',
-      
-      pickupLocation: this.formatAddress(load.pickUpLocation),
-      deliveryLocation: this.formatAddress(load.deliveryLocation),
-      pickupDate: load.pickUpDate ? new Date(load.pickUpDate).toLocaleDateString() : 'N/A',
-      deliveryDate: load.deliveryDate ? new Date(load.deliveryDate).toLocaleDateString() : 'N/A',
-      
-      vehicleMake: load.vehicleDetails?.make || 'N/A',
-      vehicleModel: load.vehicleDetails?.model || 'N/A',
-      vehicleYear: load.vehicleDetails?.year || 'N/A',
-      
-      value: load.value ? `$${load.value.toLocaleString()}` : 'N/A',
-      
-      carrierPaymentStatus: load.carrierPaymentStatus?.status || 'Pending',
-      customerPaymentStatus: load.customerPaymentStatus?.status || 'Pending',
-      
-      assignedDate: load.assignedDate ? new Date(load.assignedDate).toLocaleDateString() : 'N/A',
-      createdAt: load.createdAt ? new Date(load.createdAt).toLocaleDateString() : 'N/A'
+      orderId: '[Order ID]',
+      dispatchDate: '[Dispatch Date]',
+      equipmentType: '[Equipment type]',
+      paymentMethod: '[Payment method]',
+      paymentTerms: '[Payment terms]',
+      totalPaymentToCarrier: '[Total Payment to Carrier]',
+      billingEmail: '[Billing Email]',
+      carrierCompanyName: '[Company name]',
+      carrierDBA: '[DBA]',
+      carrierMC: '[MC#]',
+      carrierDOT: '[DOT#]',
+      dispatcherNamePhone: '[Dispatcher Name / Phone]',
+      driverNamePhone: '[Driver Name / Phone]',
+      pickupName: '[Pickup - Name]',
+      pickupAddress: '[Pickup - Address]',
+      pickupCityStateZip: '[Pickup - City, State, Zip]',
+      pickupContact: '[Pickup - Contact]',
+      pickupPhone: '[Pickup - Phone#]',
+      pickupDate: '[Pickup - Date]',
+      deliveryName: '[Delivery - Name]',
+      deliveryAddress: '[Delivery - Address]',
+      deliveryCityStateZip: '[Delivery - City, State, Zip]',
+      deliveryContact: '[Delivery - Contact]',
+      deliveryPhone: '[Delivery - Phone#]',
+      deliveryDate: '[Delivery - Date]',
+      shipmentItems: [
+        { units: '[Units]', dimensions: '[Dimensions]', description: '[Description]', weight: '[Weight]' }
+      ],
+      totalItemsToShip: '[Total Items]',
+      totalWeight: '[Total Weight]',
+      additionalDetails: '[Additional Details / Dispatch Instructions]'
+    };
+  }
+
+  mapLoadToRateData(load) {
+    const pickup = load.pickup || load.pickUpLocation;
+    const delivery = load.delivery || load.deliveryLocation;
+    const pickupAddr = pickup?.address || pickup;
+    const deliveryAddr = delivery?.address || delivery;
+    const pickupCityStateZip = [pickupAddr?.city, pickupAddr?.state, pickupAddr?.zipCode].filter(Boolean).join(', ');
+    const deliveryCityStateZip = [deliveryAddr?.city, deliveryAddr?.state, deliveryAddr?.zipCode].filter(Boolean).join(', ');
+    const isFreight = load.type?.freight === true;
+    const shipment = isFreight && load.freight?.shipment ? load.freight.shipment : [];
+    const shipmentItems = shipment.map(item => ({
+      units: item.quantity ?? '1',
+      dimensions: [item.dimensionsLength, item.dimensionsWidth, item.dimensionsHeight].filter(Boolean).join(' x ') || '',
+      description: item.commodity || '',
+      weight: item.weight != null ? String(item.weight) : ''
+    }));
+    const totalWeight = shipmentItems.reduce((sum, item) => sum + (parseFloat(item.weight) || 0), 0);
+    return {
+      orderId: load.orderId?.toString() || load.id?.toString() || '',
+      dispatchDate: load.pickUpDate ? this.formatDate(load.pickUpDate) : (load.assignedDate ? this.formatDate(load.assignedDate) : ''),
+      equipmentType: (typeof load.type === 'string' ? load.type : load.type?.vehicleType) || '',
+      paymentMethod: 'Automated Clearing House (ACH)',
+      paymentTerms: load.paymentTerms || '',
+      totalPaymentToCarrier: load.value != null ? `$${Number(load.value).toLocaleString()}` : '',
+      billingEmail: load.billingEmail || 'accounting@ciertacorp.com',
+      carrierCompanyName: load.carrier?.name || '',
+      carrierDBA: load.carrier?.dba || '',
+      carrierMC: load.carrier?.mcNumber || '',
+      carrierDOT: load.carrier?.dotNumber || '',
+      dispatcherNamePhone: load.dispatcherName || load.dispatcherPhone ? [load.dispatcherName, load.dispatcherPhone].filter(Boolean).join(' / ') : '',
+      driverNamePhone: load.driverName || load.driverPhone ? [load.driverName, load.driverPhone].filter(Boolean).join(' / ') : (load.carrier?.contact || ''),
+      pickupName: pickup?.locationName || pickup?.name || '',
+      pickupAddress: pickupAddr?.address || pickup?.address || '',
+      pickupCityStateZip: pickupCityStateZip || '',
+      pickupContact: pickup?.contactName || pickup?.contact || '',
+      pickupPhone: pickup?.contactPhone || pickup?.phone || '',
+      pickupDate: load.pickUpDate ? this.formatDate(load.pickUpDate) : '',
+      deliveryName: delivery?.locationName || delivery?.name || '',
+      deliveryAddress: deliveryAddr?.address || delivery?.address || '',
+      deliveryCityStateZip: deliveryCityStateZip || '',
+      deliveryContact: delivery?.contactName || delivery?.contact || '',
+      deliveryPhone: delivery?.contactPhone || delivery?.phone || '',
+      deliveryDate: load.deliveryDate ? this.formatDate(load.deliveryDate) : '',
+      shipmentItems: shipmentItems.length ? shipmentItems : [{ units: '', dimensions: '', description: '', weight: '' }],
+      totalItemsToShip: shipmentItems.length ? String(shipmentItems.length) : '',
+      totalWeight: totalWeight ? String(totalWeight) : '',
+      additionalDetails: load.notes || load.dispatchInstructions || ''
     };
   }
 
@@ -590,218 +1074,85 @@ class PDFService {
     }
   }
 
-  /**
-   * Fill Rate Confirmation fields on PDF
-   */
   async fillRateConfirmationFields(page, data, font, boldFont, width, height) {
-    const fontSize = 10;
-    const boldFontSize = 12;
-    
-    // Title
-    page.drawText('RATE CONFIRMATION', {
-      x: width / 2 - 80,
-      y: height - 50,
-      size: boldFontSize,
-      font: boldFont,
-      color: rgb(0, 0, 0)
+    const fontSize = 9;
+    const lineH = 14;
+    const leftColX = 50;
+    const rightColX = width / 2 + 20;
+    const draw = (text, x, y) => {
+      if (!text) return;
+      const str = String(text).slice(0, 80);
+      page.drawText(str, { x, y, size: fontSize, font, color: rgb(0, 0, 0) });
+    };
+    let y = height - 72;
+    draw(data.orderId, width - 120, y);
+    y -= lineH;
+    draw(data.dispatchDate, 220, y);
+    y -= lineH;
+    draw(data.equipmentType, 220, y);
+    y -= lineH * 2;
+    draw(data.paymentMethod, leftColX, y);
+    y -= lineH;
+    draw(data.paymentTerms, leftColX, y);
+    y -= lineH;
+    draw(data.totalPaymentToCarrier, leftColX, y);
+    y -= lineH;
+    draw(data.billingEmail, leftColX, y);
+    y = height - 72 - lineH * 3 - lineH * 2;
+    draw(data.carrierCompanyName, rightColX, y);
+    y -= lineH;
+    draw(data.carrierDBA, rightColX, y);
+    y -= lineH;
+    draw(data.carrierMC, rightColX, y);
+    y -= lineH;
+    draw(data.carrierDOT, rightColX, y);
+    y -= lineH;
+    draw(data.dispatcherNamePhone, rightColX, y);
+    y -= lineH;
+    draw(data.driverNamePhone, rightColX, y);
+    y = height - 72 - lineH * 3 - lineH * 6 - lineH * 3;
+    const pickupY = y;
+    draw(data.pickupName, leftColX, y);
+    y -= lineH;
+    draw(data.pickupAddress, leftColX, y);
+    y -= lineH;
+    draw(data.pickupCityStateZip, leftColX, y);
+    y -= lineH;
+    draw(data.pickupContact, leftColX, y);
+    y -= lineH;
+    draw(data.pickupPhone, leftColX, y);
+    y -= lineH;
+    draw(data.pickupDate, leftColX, y);
+    y = pickupY;
+    draw(data.deliveryName, rightColX, y);
+    y -= lineH;
+    draw(data.deliveryAddress, rightColX, y);
+    y -= lineH;
+    draw(data.deliveryCityStateZip, rightColX, y);
+    y -= lineH;
+    draw(data.deliveryContact, rightColX, y);
+    y -= lineH;
+    draw(data.deliveryPhone, rightColX, y);
+    y -= lineH;
+    draw(data.deliveryDate, rightColX, y);
+    y = height - 72 - lineH * 3 - lineH * 6 - lineH * 6 - lineH * 2;
+    const tableY = y;
+    const colW = (width - 100) / 4;
+    (data.shipmentItems || []).slice(0, 5).forEach((row, i) => {
+      const rowY = tableY - i * lineH;
+      draw(row.units, leftColX, rowY);
+      draw(row.dimensions, leftColX + colW, rowY);
+      draw(row.description, leftColX + colW * 2, rowY);
+      draw(row.weight, leftColX + colW * 3, rowY);
     });
-
-    let yPosition = height - 100;
-    
-    // Rate Number
-    page.drawText(`Rate Number: ${data.rateNumber}`, {
-      x: 50,
-      y: yPosition,
-      size: fontSize,
-      font: font,
-      color: rgb(0, 0, 0)
-    });
-    yPosition -= 20;
-
-    // VIN
-    page.drawText(`VIN: ${data.vin}`, {
-      x: 50,
-      y: yPosition,
-      size: fontSize,
-      font: font,
-      color: rgb(0, 0, 0)
-    });
-    yPosition -= 20;
-
-    // Vehicle Type
-    page.drawText(`Vehicle Type: ${data.vehicleType}`, {
-      x: 50,
-      y: yPosition,
-      size: fontSize,
-      font: font,
-      color: rgb(0, 0, 0)
-    });
-    yPosition -= 40;
-
-    // Customer Information
-    page.drawText('CUSTOMER INFORMATION', {
-      x: 50,
-      y: yPosition,
-      size: boldFontSize,
-      font: boldFont,
-      color: rgb(0, 0, 0)
-    });
-    yPosition -= 25;
-
-    page.drawText(`Company: ${data.customerCompany}`, {
-      x: 50,
-      y: yPosition,
-      size: fontSize,
-      font: font,
-      color: rgb(0, 0, 0)
-    });
-    yPosition -= 20;
-
-    page.drawText(`Email: ${data.customerEmails}`, {
-      x: 50,
-      y: yPosition,
-      size: fontSize,
-      font: font,
-      color: rgb(0, 0, 0)
-    });
-    yPosition -= 40;
-
-    // Carrier Information
-    page.drawText('CARRIER INFORMATION', {
-      x: 50,
-      y: yPosition,
-      size: boldFontSize,
-      font: boldFont,
-      color: rgb(0, 0, 0)
-    });
-    yPosition -= 25;
-
-    page.drawText(`Name: ${data.carrierName}`, {
-      x: 50,
-      y: yPosition,
-      size: fontSize,
-      font: font,
-      color: rgb(0, 0, 0)
-    });
-    yPosition -= 20;
-
-    page.drawText(`MC Number: ${data.carrierMC}`, {
-      x: 50,
-      y: yPosition,
-      size: fontSize,
-      font: font,
-      color: rgb(0, 0, 0)
-    });
-    yPosition -= 20;
-
-    page.drawText(`Contact: ${data.carrierContact}`, {
-      x: 50,
-      y: yPosition,
-      size: fontSize,
-      font: font,
-      color: rgb(0, 0, 0)
-    });
-    yPosition -= 40;
-
-    // Route Information
-    page.drawText('ROUTE INFORMATION', {
-      x: 50,
-      y: yPosition,
-      size: boldFontSize,
-      font: boldFont,
-      color: rgb(0, 0, 0)
-    });
-    yPosition -= 25;
-
-    page.drawText(`From: ${data.pickupLocation}`, {
-      x: 50,
-      y: yPosition,
-      size: fontSize,
-      font: font,
-      color: rgb(0, 0, 0)
-    });
-    yPosition -= 20;
-
-    page.drawText(`To: ${data.deliveryLocation}`, {
-      x: 50,
-      y: yPosition,
-      size: fontSize,
-      font: font,
-      color: rgb(0, 0, 0)
-    });
-    yPosition -= 20;
-
-    page.drawText(`Pickup Date: ${data.pickupDate}`, {
-      x: 50,
-      y: yPosition,
-      size: fontSize,
-      font: font,
-      color: rgb(0, 0, 0)
-    });
-    yPosition -= 20;
-
-    page.drawText(`Delivery Date: ${data.deliveryDate}`, {
-      x: 50,
-      y: yPosition,
-      size: fontSize,
-      font: font,
-      color: rgb(0, 0, 0)
-    });
-    yPosition -= 40;
-
-    // Vehicle Details
-    page.drawText('VEHICLE DETAILS', {
-      x: 50,
-      y: yPosition,
-      size: boldFontSize,
-      font: boldFont,
-      color: rgb(0, 0, 0)
-    });
-    yPosition -= 25;
-
-    page.drawText(`${data.vehicleYear} ${data.vehicleMake} ${data.vehicleModel}`, {
-      x: 50,
-      y: yPosition,
-      size: fontSize,
-      font: font,
-      color: rgb(0, 0, 0)
-    });
-    yPosition -= 40;
-
-    // Financial Information
-    page.drawText('FINANCIAL INFORMATION', {
-      x: 50,
-      y: yPosition,
-      size: boldFontSize,
-      font: boldFont,
-      color: rgb(0, 0, 0)
-    });
-    yPosition -= 25;
-
-    page.drawText(`Value: ${data.value}`, {
-      x: 50,
-      y: yPosition,
-      size: fontSize,
-      font: font,
-      color: rgb(0, 0, 0)
-    });
-    yPosition -= 20;
-
-    page.drawText(`Carrier Payment Status: ${data.carrierPaymentStatus}`, {
-      x: 50,
-      y: yPosition,
-      size: fontSize,
-      font: font,
-      color: rgb(0, 0, 0)
-    });
-    yPosition -= 20;
-
-    page.drawText(`Customer Payment Status: ${data.customerPaymentStatus}`, {
-      x: 50,
-      y: yPosition,
-      size: fontSize,
-      font: font,
-      color: rgb(0, 0, 0)
+    y = tableY - lineH * 6;
+    draw(data.totalItemsToShip, leftColX + colW * 0.5, y);
+    draw(data.totalWeight, leftColX + colW * 2.5, y);
+    y -= lineH * 2;
+    const lines = (data.additionalDetails || '').split('\n').slice(0, 4);
+    lines.forEach((line) => {
+      draw(line.trim(), leftColX, y);
+      y -= lineH;
     });
   }
 
@@ -885,6 +1236,102 @@ class PDFService {
   }
 
   /**
+   * Generate BOL PDF with every field filled with its field name for visual identification
+   * Output: BOL_FIELD_MAP.pdf in generated-pdfs folder
+   */
+  async generateBOLFieldMap() {
+    try {
+      const templatePath = path.join(this.templatesPath, 'BOL CIERTA (6).pdf');
+      const templateBytes = await fs.readFile(templatePath);
+      const pdfDoc = await PDFDocument.load(templateBytes, {
+        ignoreEncryption: false,
+        updateMetadata: false
+      });
+      const form = pdfDoc.getForm();
+      const fields = form.getFields();
+
+      const fieldCategories = {
+        'top': ['Bill to', 'Texte3', 'Texte4', 'Texte5', 'Texte6'],
+        'shipper': ['Shipper\'s name'],
+        'consignee': ['Consignee', 'Consignor'],
+        'carrier': ['Carrier'],
+        'dates': ['Date', 'Date 2', 'Date 3'],
+        'shipment': ['quantity', 'description', 'weight', 'total'],
+        'other': []
+      };
+
+      fields.forEach((field, index) => {
+        const name = field.getName();
+        const type = field.constructor.name;
+        const fieldNumber = index + 1;
+        
+        let value = '';
+        let category = 'other';
+        
+        if (name.toLowerCase().includes('shipper')) category = 'shipper';
+        else if (name.toLowerCase().includes('consign')) category = 'consignee';
+        else if (name.toLowerCase().includes('carrier')) category = 'carrier';
+        else if (name.toLowerCase().includes('date')) category = 'dates';
+        else if (name.toLowerCase().includes('quantity') || name.toLowerCase().includes('description') || name.toLowerCase().includes('weight') || name.toLowerCase().includes('total')) category = 'shipment';
+        else if (fieldCategories.top.some(t => name.includes(t))) category = 'top';
+        
+        const categoryPrefix = {
+          'top': 'TOP',
+          'shipper': 'SHIPPER',
+          'consignee': 'CONSIGNEE',
+          'carrier': 'CARRIER',
+          'dates': 'DATE',
+          'shipment': 'SHIPMENT',
+          'other': 'FIELD'
+        }[category] || 'FIELD';
+
+        try {
+          if (type === 'PDFTextField') {
+            if (name === 'Shipper\'s name' || name === 'Consignee') {
+              value = `[#${fieldNumber}] ${categoryPrefix} - ${name}\nName: [HERE]\nAddress: [HERE]\nCity/State/Zip: [HERE]\nSID#: [HERE]`;
+            } else {
+              value = `[#${fieldNumber}] ${categoryPrefix} - ${name}`;
+            }
+            field.setText(value);
+          } else if (type === 'PDFCheckBox') {
+            field.check();
+            value = `[#${fieldNumber}] CHECKBOX - ${name} (CHECKED)`;
+          } else if (type === 'PDFDropdown') {
+            const options = field.getOptions();
+            if (options.length > 0) {
+              field.select(options[0]);
+              value = `[#${fieldNumber}] DROPDOWN - ${name} = ${options[0]}`;
+            }
+          } else if (type === 'PDFRadioGroup') {
+            const options = field.getOptions();
+            if (options.length > 0) {
+              field.select(options[0]);
+              value = `[#${fieldNumber}] RADIO - ${name} = ${options[0]}`;
+            }
+          }
+        } catch (e) {
+          console.warn(`Could not set field "${name}":`, e.message);
+        }
+      });
+
+      const filename = 'BOL_FIELD_MAP.pdf';
+      const outputPath = path.join(this.outputPath, filename);
+      const pdfBytes = await pdfDoc.save({ useObjectStreams: false });
+      await fs.writeFile(outputPath, pdfBytes);
+
+      return {
+        success: true,
+        filename,
+        path: outputPath,
+        totalFields: fields.length
+      };
+    } catch (error) {
+      console.error('Error generating BOL field map:', error);
+      throw new Error(`Failed to generate BOL field map: ${error.message}`);
+    }
+  }
+
+  /**
    * Delete a PDF file by path or filename
    */
   async deletePDF(pdfPathOrFilename) {
@@ -927,6 +1374,84 @@ class PDFService {
       }
     } catch (error) {
       console.error('Error cleaning up PDFs:', error);
+    }
+  }
+
+  /**
+   * Upload BOL PDF to AWS S3 and save reference in Load
+   * FUTURE FUNCTION: Ready for AWS integration
+   * Currently not called - PDFs are saved locally only
+   * 
+   * @param {String} localPdfPath - Local path to generated PDF
+   * @param {String} loadId - Load ID
+   * @param {String} orderId - Order ID for filename
+   * @returns {Promise<Object>} - { success, s3Key, s3Url }
+   */
+  async uploadBOLToS3(localPdfPath, loadId, orderId) {
+    try {
+      const { uploadToS3 } = require('./s3Service');
+      
+      const pdfBuffer = await fs.readFile(localPdfPath);
+      const filename = `BOL_${orderId || loadId}.pdf`;
+      
+      const s3Key = await uploadToS3(
+        pdfBuffer,
+        filename,
+        'load',
+        loadId.toString(),
+        'pdfs',
+        'bol'
+      );
+      
+      const s3Url = `/api/files/${s3Key}`;
+      
+      return {
+        success: true,
+        s3Key,
+        s3Url,
+        filename
+      };
+    } catch (error) {
+      console.error('[PDFService] Failed to upload BOL to S3:', error);
+      throw new Error(`Failed to upload BOL to S3: ${error.message}`);
+    }
+  }
+
+  /**
+   * Generate BOL and optionally upload to S3
+   * FUTURE FUNCTION: When ready, set uploadToS3 = true
+   * 
+   * @param {Object} loadData - Load data object
+   * @param {String} loadId - Load ID
+   * @param {Boolean} uploadToS3 - Whether to upload to S3 (default: false)
+   * @returns {Promise<Object>} - Result with local path and optionally S3 key
+   */
+  async generateBOLWithS3(loadData, loadId = null, uploadToS3 = false) {
+    try {
+      const bolResult = await this.generateBOL(loadData, loadId);
+      
+      if (uploadToS3 && loadId) {
+        const s3Result = await this.uploadBOLToS3(
+          bolResult.path,
+          loadId,
+          loadData.orderId
+        );
+        
+        return {
+          ...bolResult,
+          s3Key: s3Result.s3Key,
+          s3Url: s3Result.s3Url,
+          uploadedToS3: true
+        };
+      }
+      
+      return {
+        ...bolResult,
+        uploadedToS3: false
+      };
+    } catch (error) {
+      console.error('[PDFService] Failed to generate BOL with S3:', error);
+      throw error;
     }
   }
 }

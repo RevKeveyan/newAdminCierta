@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { verifyToken } = require('../middlewares/authMiddleware');
 const { checkRole } = require('../middlewares/roleMiddleware');
-const { uploadUserFiles } = require('../middlewares/uploadMiddleware');
+const { uploadUserFiles, uploadSeparateFiles } = require('../middlewares/uploadMiddleware');
 const UserController = require('../controllers/UserController');
 
 // GET /users
@@ -21,12 +21,20 @@ router.get(
   UserController.search
 );
 
-// GET /users/role/:role - get users by role
+// GET /users/role/:role - get users by role (MUST be before /:id routes)
 router.get(
   '/role/:role',
   // verifyToken,
   // checkRole(['admin']),
   UserController.getByRole
+);
+
+// GET /users/:id/allowedCustomers - get customers for THIS specific user
+router.get(
+  '/:id/allowedCustomers',
+  // verifyToken,
+  // checkRole(['admin']),
+  UserController.getAllowedCustomers
 );
 
 // GET /users/profile - get current user profile
@@ -37,22 +45,22 @@ router.get(
 );
 
 // POST /users
-// Supports: profileImage (image), userFile (PDF)
+// Supports: profileImage (image), pdfs (multiple PDFs)
 router.post(
   '/',
   // verifyToken,
   // checkRole(['admin']),
-  uploadUserFiles('users'),
+  uploadSeparateFiles('users', { allowImages: true, allowPDFs: true }),
   UserController.create
 );
 
 // PUT /users/:id
-// Supports: profileImage (image), userFile (PDF)
+// Supports: profileImage (image), pdfs (multiple PDFs)
 router.put(
   '/:id',
   // verifyToken,
   // checkRole(['admin']),
-  uploadUserFiles('users'),
+  uploadSeparateFiles('users', { allowImages: true, allowPDFs: true }),
   UserController.update
 );
 
@@ -65,11 +73,11 @@ router.put(
 );
 
 // PUT /users/profile - update current user profile
-// Supports: profileImage (image), userFile (PDF)
+// Supports: profileImage (image), pdfs (multiple PDFs)
 router.put(
   '/profile/:id',
   verifyToken,
-  uploadUserFiles('users'),
+  uploadSeparateFiles('users', { allowImages: true, allowPDFs: true }),
   UserController.updateProfile
 );
 

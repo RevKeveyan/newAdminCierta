@@ -5,8 +5,23 @@ class BaseController {
 
   getAll = async (req, res) => {
     try {
-      const docs = await this.model.find({});
-      res.status(200).json(docs);
+      // Security: Always use pagination
+      const page = parseInt(req.query.page) || 1;
+      const limit = Math.min(parseInt(req.query.limit) || 20, 100); // Default 20, max 100
+      const skip = (page - 1) * limit;
+
+      const docs = await this.model.find({}).skip(skip).limit(limit);
+      const total = await this.model.countDocuments({});
+
+      res.status(200).json({
+        data: docs,
+        pagination: {
+          total,
+          totalPages: Math.ceil(total / limit),
+          currentPage: page,
+          limit
+        }
+      });
     } catch (err) {
       res.status(500).json({ error: "Failed to fetch all items" });
     }
@@ -105,35 +120,21 @@ class BaseController {
     }
   };
 
+  // Generic create - only handles basic model creation
+  // Specific logic (files, history, etc.) should be in specific controllers
   create = async (req, res) => {
     try {
-      const images = req.uploadedFiles || [];
-      const createdBy = req.user.id;
-
-      const newLoad = new this.model({
-        ...req.body,
-        images,
-        createdBy,
-      });
-
-      const saved = await newLoad.save();
-
-      await Model.create({
-        loadId: saved._id,
-        action: "created",
-        changedBy: createdBy,
-        changes: Object.keys(req.body).map((key) => ({
-          field: key,
-          oldValue: null,
-          newValue: req.body[key],
-        })),
-      });
-
+      // Generic create - just save the model
+      // No history, no special logic - that belongs in specific controllers
+      const doc = new this.model(req.body);
+      const saved = await doc.save();
+      
       res.status(201).json(saved);
     } catch (err) {
-      res
-        .status(500)
-        .json({ error: "Failed to create load", details: err.message });
+      res.status(500).json({ 
+        error: "Failed to create record", 
+        details: err.message 
+      });
     }
   };
 }

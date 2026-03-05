@@ -11,12 +11,9 @@ const vehicleShipmentSchema = new mongoose.Schema({
 const vehicleSchema = new mongoose.Schema({
   shipment: [vehicleShipmentSchema],
   specialRequirements: { type: String },
-  // Files organized by type
-  images: [String],  // Array of image URLs (replaces vehicleImages)
-  pdfs: [String],    // Array of PDF URLs
-  // Legacy field for backward compatibility
+  pdfs: [String],   
   vehicleImages: [String]
-}, { _id: false });
+});
 
 module.exports = vehicleSchema;
 

@@ -53,35 +53,37 @@ class CacheService {
   }
 
   async get(key) {
-    // TEMPORARILY DISABLE REDIS FOR PERFORMANCE
-    return null;
+    // Check if caching is enabled
+    if (process.env.CACHE_ENABLED !== 'true') {
+      return null;
+    }
     
-    // Original code commented out for performance
-    // if (!this.isConnected || !this.client) return null;
-    // 
-    // try {
-    //   const value = await this.client.get(key);
-    //   return value ? JSON.parse(value) : null;
-    // } catch (error) {
-    //   console.error('Cache get error:', error);
-    //   return null;
-    // }
+    if (!this.isConnected || !this.client) return null;
+    
+    try {
+      const value = await this.client.get(key);
+      return value ? JSON.parse(value) : null;
+    } catch (error) {
+      console.error('Cache get error:', error);
+      return null;
+    }
   }
 
   async set(key, value, ttl = 3600) {
-    // TEMPORARILY DISABLE REDIS FOR PERFORMANCE
-    return true;
+    // Check if caching is enabled
+    if (process.env.CACHE_ENABLED !== 'true') {
+      return false;
+    }
     
-    // Original code commented out for performance
-    // if (!this.isConnected || !this.client) return false;
-    // 
-    // try {
-    //   await this.client.setEx(key, ttl, JSON.stringify(value));
-    //   return true;
-    // } catch (error) {
-    //   console.error('Cache set error:', error);
-    //   return false;
-    // }
+    if (!this.isConnected || !this.client) return false;
+    
+    try {
+      await this.client.setEx(key, ttl, JSON.stringify(value));
+      return true;
+    } catch (error) {
+      console.error('Cache set error:', error);
+      return false;
+    }
   }
 
   async del(key) {

@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+const { getCurrentDateUTC5 } = require("../utils/dateUtils");
 
 const userSchema = new mongoose.Schema(
   {
@@ -6,9 +7,10 @@ const userSchema = new mongoose.Schema(
     lastName: { type: String, required: true },
     companyName: { type: String },
     email: { type: String, required: true, unique: true, lowercase: true },
+    phoneNumber: { type: String, default: "" },
     password: { type: String, required: true },
-    profileImage: { type: String }, 
-    userFile: { type: String }, // PDF file URL
+    profileImage: { type: String },
+    pdfs: [String], // Array of PDF file URLs
     role: {
       type: String,
       enum: [
@@ -17,10 +19,14 @@ const userSchema = new mongoose.Schema(
         "accountingManager",
         "accountingIn",
         "accountingOut",
+        "freightBroker",
         "dispatcher",
+        "Pre-dispatcher",
         "partner",
-        "BidAgent",
+        "salesAgent",
+        "bidAgent",
       ],
+      
       required: true,
     },
     status: {
@@ -28,8 +34,26 @@ const userSchema = new mongoose.Schema(
       enum: ["active", "suspended"],
       default: "active",
     },
+    // Список разрешенных customers для этого user
+    allowedCustomers: [{
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Customer'
+    }],
   },
   { timestamps: true, versionKey: false }
 );
+
+// Pre-save hook to set dates in UTC-5
+userSchema.pre('save', function(next) {
+  const now = getCurrentDateUTC5();
+  if (this.isNew) {
+    this.createdAt = now;
+  }
+  this.updatedAt = now;
+  next();
+});
+
+// Индексы для быстрого поиска
+userSchema.index({ companyName: 1 }, { sparse: true });
 
 module.exports = mongoose.model("User", userSchema);

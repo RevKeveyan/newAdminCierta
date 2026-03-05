@@ -4,6 +4,7 @@ const router = express.Router();
 const { PaymentReceivableController, PaymentPayableController } = require('../controllers/PaymentController');
 const { verifyToken } = require('../middlewares/authMiddleware');
 const { checkRole } = require('../middlewares/roleMiddleware');
+const { uploadSeparateFiles } = require('../middlewares/uploadMiddleware');
 
 // ==========================================
 // PAYMENT RECEIVABLE ROUTES (от customers)
@@ -83,13 +84,14 @@ router.post(
 
 /**
  * @route PUT /payments/receivable/:id
- * @desc Обновить receivable
+ * @desc Обновить receivable (с поддержкой загрузки файлов)
  * @access Private
  */
 router.put(
   '/receivable/:id',
   // verifyToken,
   // checkRole(['admin', 'accountant']),
+  uploadSeparateFiles('payments-receivable', { allowImages: true, allowPDFs: true }),
   PaymentReceivableController.update
 );
 
@@ -184,13 +186,14 @@ router.post(
 
 /**
  * @route PUT /payments/payable/:id
- * @desc Обновить payable (банковские реквизиты)
+ * @desc Обновить payable (с поддержкой загрузки файлов)
  * @access Private
  */
 router.put(
   '/payable/:id',
   // verifyToken,
   // checkRole(['admin', 'accountant']),
+  uploadSeparateFiles('payments-payable', { allowImages: true, allowPDFs: true }),
   PaymentPayableController.update
 );
 

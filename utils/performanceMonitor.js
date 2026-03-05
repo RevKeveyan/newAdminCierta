@@ -50,9 +50,10 @@ class PerformanceMonitor {
       }
     }
 
-    // Add response header
-    res.set('X-Response-Time', `${duration}ms`);
-    res.set('X-Performance-ID', req.performanceId);
+    if (!res.headersSent) {
+      res.set('X-Response-Time', `${duration}ms`);
+      res.set('X-Performance-ID', req.performanceId);
+    }
 
     // Keep only last 1000 metrics to prevent memory issues
     if (this.metrics.length > 1000) {

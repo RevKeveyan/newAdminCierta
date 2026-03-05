@@ -17,6 +17,10 @@ class UniversalBaseController {
     this.defaultSort = options.defaultSort || { createdAt: -1 };
     this.softDelete = options.softDelete || false;
     this.auditFields = options.auditFields || ['createdBy', 'updatedBy'];
+    
+    // Security: Whitelist for filters and sort fields
+    this.allowedFilters = options.allowedFilters || [];
+    this.allowedSortFields = options.allowedSortFields || ['createdAt', 'updatedAt'];
   }
 
   /**
@@ -26,12 +30,15 @@ class UniversalBaseController {
     try {
       const {
         page = 1,
-        limit = 10,
+        limit: requestedLimit = 20, // Default 20 instead of 10
         sortBy = 'createdAt',
         sortOrder = 'desc',
         search,
         ...filters
       } = req.query;
+      
+      // Security: Enforce max limit
+      const limit = Math.min(parseInt(requestedLimit), 100); // Max 100 items per page
 
       // Исключаем параметры пагинации и сортировки из фильтров
       const filterParams = { ...filters };
@@ -144,7 +151,11 @@ class UniversalBaseController {
       }
 
       // Подготовка данных
-      const data = this.prepareCreateData(req);
+      let data = this.prepareCreateData(req);
+      
+      // Удаляем null и undefined значения перед сохранением
+      const { removeUndefinedNullValues } = require('../utils/dataHelpers');
+      data = removeUndefinedNullValues(data);
       
       // Создание записи
       const newDoc = new this.model(data);
@@ -217,7 +228,11 @@ class UniversalBaseController {
       }
 
       // Подготовка данных (только для измененных полей)
-      const data = this.prepareUpdateData(req, filteredData);
+      let data = this.prepareUpdateData(req, filteredData);
+      
+      // Удаляем null и undefined значения перед сохранением
+      const { removeUndefinedNullValues } = require('../utils/dataHelpers');
+      data = removeUndefinedNullValues(data);
 
       // Обновление записи
       const updated = await this.model.findByIdAndUpdate(
@@ -459,13 +474,16 @@ class UniversalBaseController {
   // ========== ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ ==========
 
   /**
-   * Построение фильтра
+   * Построение фильтра с whitelist проверкой
    */
   buildFilter(filters, search) {
     const filter = {};
 
     // Исключаем служебные параметры из фильтров
     const excludedKeys = ['page', 'limit', 'sortBy', 'sortOrder', 'search'];
+
+    // Security: Only allow whitelisted filter fields
+    const hasWhitelist = Array.isArray(this.allowedFilters) && this.allowedFilters.length > 0;
 
     // Добавление фильтров
     Object.keys(filters).forEach(key => {
@@ -474,7 +492,19 @@ class UniversalBaseController {
         return;
       }
 
+      // Security: Check whitelist if configured
+      if (hasWhitelist && !this.allowedFilters.includes(key)) {
+        console.warn(`[Security] Filter field "${key}" not in whitelist, ignoring`);
+        return;
+      }
+
       if (filters[key] !== undefined && filters[key] !== '') {
+        if (Array.isArray(filters[key])) {
+          if (filters[key].length > 0) {
+            filter[key] = { $in: filters[key] };
+          }
+          return;
+        }
         if (key.includes('Date') || (key.includes('At') && key !== 'sortBy' && key !== 'sortOrder')) {
           // Обработка дат (но не sortBy/sortOrder)
           if (typeof filters[key] === 'string' && filters[key].includes('to')) {
@@ -495,8 +525,8 @@ class UniversalBaseController {
       }
     });
 
-    // Добавление поиска
-    if (search) {
+    // Добавление поиска (только по разрешенным полям)
+    if (search && this.searchFields.length > 0) {
       const searchRegex = { $regex: search, $options: 'i' };
       filter.$or = this.searchFields.map(field => ({
         [field]: searchRegex
@@ -523,9 +553,17 @@ class UniversalBaseController {
   }
 
   /**
-   * Построение сортировки
+   * Построение сортировки с whitelist проверкой
    */
   buildSort(sortBy, sortOrder) {
+    // Security: Validate sort field against whitelist
+    const hasWhitelist = Array.isArray(this.allowedSortFields) && this.allowedSortFields.length > 0;
+    
+    if (hasWhitelist && !this.allowedSortFields.includes(sortBy)) {
+      console.warn(`[Security] Sort field "${sortBy}" not in whitelist, using default`);
+      sortBy = 'createdAt'; // Default to createdAt
+    }
+    
     const sort = {};
     sort[sortBy] = sortOrder === 'asc' ? 1 : -1;
     return sort;
@@ -564,7 +602,13 @@ class UniversalBaseController {
   prepareUpdateData(req, filteredData = null) {
     const data = filteredData ? { ...filteredData } : { ...req.body };
     
-    // Добавление аудиторских полей
+    // Security: Remove dangerous fields that might have been passed in req.body
+    const dangerousFields = ['_id', 'id', 'userId', 'createdAt', '__v'];
+    dangerousFields.forEach(field => {
+      delete data[field];
+    });
+    
+    // Добавление аудиторских полей (set by server, not client)
     if (req.user?.id) {
       data.updatedBy = req.user.id;
       data.updatedAt = new Date();
@@ -594,19 +638,75 @@ class UniversalBaseController {
 
       if (rule.required && (value === undefined || value === null || value === '')) {
         errors.push({ field, message: `${field} is required` });
+        return; // Skip further validation if required field is missing
       }
 
-      if (value !== undefined && rule.type) {
+      // Skip validation if value is undefined and not required
+      if (value === undefined) {
+        return;
+      }
+
+      if (rule.type) {
+        // Validate string type
+        if (rule.type === 'string') {
+          if (typeof value !== 'string') {
+            errors.push({ field, message: `${field} must be a string` });
+          } else {
+            // Validate string length if specified
+            if (rule.minLength && value.length < rule.minLength) {
+              errors.push({ field, message: `${field} must be at least ${rule.minLength} characters` });
+            }
+            if (rule.maxLength && value.length > rule.maxLength) {
+              errors.push({ field, message: `${field} must be at most ${rule.maxLength} characters` });
+            }
+          }
+        }
+        
+        // Validate email type
         if (rule.type === 'email' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) {
           errors.push({ field, message: `${field} must be a valid email` });
         }
-        if (rule.type === 'number' && isNaN(value)) {
-          errors.push({ field, message: `${field} must be a number` });
+        
+        // Validate number type
+        if (rule.type === 'number') {
+          if (isNaN(value)) {
+            errors.push({ field, message: `${field} must be a number` });
+          } else {
+            // Validate number range if specified
+            if (rule.min !== undefined && Number(value) < rule.min) {
+              errors.push({ field, message: `${field} must be at least ${rule.min}` });
+            }
+            if (rule.max !== undefined && Number(value) > rule.max) {
+              errors.push({ field, message: `${field} must be at most ${rule.max}` });
+            }
+          }
+        }
+        
+        // Validate array type
+        if (rule.type === 'array') {
+          if (!Array.isArray(value)) {
+            errors.push({ field, message: `${field} must be an array` });
+          } else {
+            // Validate array length if specified
+            if (rule.minItems && value.length < rule.minItems) {
+              errors.push({ field, message: `${field} must have at least ${rule.minItems} items` });
+            }
+            if (rule.maxItems && value.length > rule.maxItems) {
+              errors.push({ field, message: `${field} must have at most ${rule.maxItems} items` });
+            }
+          }
+        }
+        
+        // Validate ObjectId type
+        if (rule.type === 'objectId') {
+          if (!mongoose.Types.ObjectId.isValid(value)) {
+            errors.push({ field, message: `${field} must be a valid ObjectId` });
+          }
         }
       }
 
       // Валидация enum значений
-      if (value !== undefined && rule.enum && Array.isArray(rule.enum)) {
+      if (rule.enum && Array.isArray(rule.enum)) {
         if (!rule.enum.includes(value)) {
           errors.push({ 
             field, 
@@ -735,14 +835,26 @@ class UniversalBaseController {
   filterChangedFields(existingDoc, newData) {
     const filteredData = {};
     
+    // Security: List of fields that should NEVER be updated from client request
+    const dangerousFields = [
+      '_id', 
+      'id', 
+      'userId', 
+      'createdAt', 
+      'updatedAt', 
+      '__v',
+      'createdBy' // Should be set by server, not client
+    ];
+    
     Object.keys(newData).forEach(key => {
-      const existingValue = existingDoc[key];
-      const newValue = newData[key];
-      
-      // Пропускаем служебные поля
-      if (['_id', 'createdAt', 'updatedAt', '__v'].includes(key)) {
+      // Security: Skip dangerous fields
+      if (dangerousFields.includes(key)) {
+        console.warn(`[Security] Attempted to update protected field: ${key}`);
         return;
       }
+      
+      const existingValue = existingDoc[key];
+      const newValue = newData[key];
       
       // Сравниваем значения
       const isChanged = this.compareValues(existingValue, newValue);
@@ -761,39 +873,45 @@ class UniversalBaseController {
   async createHistoryRecord(recordId, action, userId, changes) {
     if (!this.historyModel) return;
 
-    // Если userId не предоставлен, пропускаем создание истории
     if (!userId) {
       console.warn(`Cannot create history record: userId is required for action '${action}'`);
       return;
     }
 
     try {
-      // Для создания записи не записываем детальные изменения, только createdBy
-      if (action === 'created') {
-        await this.historyModel.create({
-          loadId: recordId,
-          action,
-          changedBy: userId,
-          changes: [] // Пустой массив для создания - сохраняем только createdBy
-        });
+      const User = require('../models/User');
+      const user = await User.findById(userId).select('_id role email').lean();
+      
+      if (!user) {
+        console.warn(`Cannot create history record: user with id ${userId} not found`);
         return;
       }
 
-      // Для обновлений записываем только реальные изменения
+      const actor = {
+        actorId: user._id,
+        actorRole: user.role || 'unknown',
+        actorEmail: user.email || null
+      };
+
       const changesArray = Array.isArray(changes) ? changes : [];
       
-      // Фильтруем пустые изменения
-      const filteredChanges = changesArray.filter(change => 
-        change.oldValue !== change.newValue && 
-        (change.oldValue !== null || change.newValue !== null)
-      );
+      const filteredChanges = changesArray
+        .filter(change => 
+          change.field && 
+          change.oldValue !== change.newValue && 
+          (change.oldValue !== null || change.newValue !== null)
+        )
+        .map(change => ({
+          field: change.field,
+          from: change.oldValue,
+          to: change.newValue
+        }));
 
-      // Создаем запись только если есть реальные изменения
-      if (filteredChanges.length > 0 || action === 'deleted') {
+      if (filteredChanges.length > 0 || action === 'created' || action === 'deleted') {
         await this.historyModel.create({
-          loadId: recordId,
+          load: recordId,
           action,
-          changedBy: userId,
+          actor,
           changes: filteredChanges
         });
       }
@@ -829,10 +947,38 @@ class UniversalBaseController {
     }
 
     if (error.code === 11000) {
+      const errorDetails = { ...error.keyValue };
+      if (errorDetails.loadId !== undefined) {
+        delete errorDetails.loadId;
+      }
+      
+      const duplicateFields = Object.keys(errorDetails);
+      const hasNullUndefinedDuplicate = duplicateFields.some(field => {
+        const value = errorDetails[field];
+        return value === null || value === undefined || value === 'null' || value === 'undefined';
+      });
+      
+      if (hasNullUndefinedDuplicate) {
+        return res.status(200).json({
+          success: true,
+          message: 'Record saved successfully (duplicate null/undefined values are allowed)'
+        });
+      }
+      
+      let errorMessage = 'A record with this value already exists';
+      if (errorDetails.orderId) {
+        errorMessage = `Load with Order ID "${errorDetails.orderId}" already exists`;
+      } else if (duplicateFields.length > 0) {
+        const field = duplicateFields[0];
+        const value = errorDetails[field];
+        errorMessage = `A record with ${field} "${value}" already exists`;
+      }
+      
       return res.status(400).json({
         success: false,
         error: 'Duplicate entry',
-        details: error.keyValue
+        details: duplicateFields.length > 0 ? errorDetails : null,
+        message: errorMessage
       });
     }
 
