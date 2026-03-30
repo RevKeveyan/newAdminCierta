@@ -72,7 +72,7 @@ exports.resetPassword = async (req, res) => {
       return res.status(400).json({ error: 'Incorrect code' });
     }
 
-    const hashed = await bcrypt.hash(newPassword, 8);
+    const hashed = await bcrypt.hash(newPassword, 12);
     await User.findOneAndUpdate({ email }, { password: hashed });
     await ResetCode.deleteOne({ email });
 

@@ -473,6 +473,55 @@ class StatsController {
     };
   }
 
+  getLoadFilterForStatsUser(scope, user) {
+    if (!scope || !user) return null;
+    const role = user.role;
+    if (role === 'admin' || role === 'manager') return {};
+    if (role === 'freightBroker') {
+      const uid = user._id || user.id;
+      if (!uid) return null;
+      return { createdBy: mongoose.Types.ObjectId.isValid(uid) ? new mongoose.Types.ObjectId(uid) : uid };
+    }
+    if (role === 'dispatcher' || role === 'Pre-dispatcher' || role === 'bidAgent' || role === 'salesAgent') {
+      const ids = scope.allowedEntityIds?.customer;
+      if (!Array.isArray(ids) || ids.length === 0) return null;
+      const objectIds = ids.filter(id => id && mongoose.Types.ObjectId.isValid(id)).map(id => new mongoose.Types.ObjectId(id));
+      if (objectIds.length === 0) return null;
+      return { customer: { $in: objectIds } };
+    }
+    return null;
+  }
+
+  async getVisibleLoadsTotals(scope, user) {
+    const filter = this.getLoadFilterForStatsUser(scope, user);
+    if (filter === null) return { total: 0, byStatus: { listed: 0, dispatched: 0, pickedUp: 0, delivered: 0, onHold: 0, cancelled: 0, expired: 0 } };
+    const statusMap = { 'Listed': 'listed', 'Dispatched': 'dispatched', 'Picked Up': 'pickedUp', 'Delivered': 'delivered', 'On Hold': 'onHold', 'Cancelled': 'cancelled' };
+    const [total, statusAgg] = await Promise.all([
+      Load.countDocuments(filter),
+      Load.aggregate([{ $match: filter }, { $group: { _id: '$status', count: { $sum: 1 } } }])
+    ]);
+    const byStatus = { listed: 0, dispatched: 0, pickedUp: 0, delivered: 0, onHold: 0, cancelled: 0, expired: 0 };
+    statusAgg.forEach(item => {
+      const key = statusMap[item._id] || (item._id && item._id.toLowerCase && item._id.toLowerCase()) || 'listed';
+      if (byStatus[key] !== undefined) byStatus[key] = item.count;
+      else byStatus.listed = (byStatus.listed || 0) + item.count;
+    });
+    const deadlinePast = await Load.find({
+      ...filter,
+      status: { $nin: STATISTICS_DATE_SOURCES.EXPIRED.FINAL_STATUSES }
+    }).select('dates.deadlineAt dates.deadline').lean();
+    let expired = 0;
+    const now = new Date();
+    deadlinePast.forEach(load => {
+      const v = load.dates?.deadlineAt || load.dates?.deadline;
+      if (!v) return;
+      const d = v instanceof Date ? v : new Date(v);
+      if (!isNaN(d.getTime()) && d < now) expired++;
+    });
+    byStatus.expired = expired;
+    return { total, byStatus };
+  }
+
   /**
    * GET /api/stats (Facade endpoint для фронтенда)
    * Единый endpoint, который возвращает данные в формате фронтенда
@@ -491,7 +540,9 @@ class StatsController {
         paymentType,
         paymentStatus,
         grain: requestedGrain,
-        search
+        search,
+        useDelta,
+        useLegacy
       } = req.query;
 
       if (!from || !to) {
@@ -557,9 +608,51 @@ class StatsController {
 
       const dateKeys = this.getDateKeysForRange(fromDate, toDate, grain);
       const facadeUserId = req.user?._id?.toString?.() || req.user?._id;
-      const snapshots = customerIdsForAggregate && customerIdsForAggregate.length > 0
+
+      const forceLegacy = useLegacy === '1';
+      const isCustomerAggregate = customerIdsForAggregate && customerIdsForAggregate.length > 0;
+      const canUseDeltaForLoads = grain === 'day' && !isCustomerAggregate && useDelta === '1';
+      const shouldUseDeltaForLoads = !forceLegacy && canUseDeltaForLoads;
+
+      const rawSnapshots = isCustomerAggregate
         ? await this.getSnapshotsForDateKeys(dateKeys, grain, 'customer', null, customerIdsForAggregate, facadeUserId)
+        : shouldUseDeltaForLoads
+        ? await Promise.all([
+            this.getSnapshotsForDateKeys(dateKeys, grain, entityType, entityId),
+            statsWorker.getDeltaSnapshotsForDateKeys({ dateKeys, entityType, entityId })
+          ]).then(([legacySnapshots, deltaSnapshots]) => {
+            const legacyArr = Array.isArray(legacySnapshots)
+              ? legacySnapshots
+              : legacySnapshots
+              ? [legacySnapshots]
+              : [];
+            const deltaArr = Array.isArray(deltaSnapshots)
+              ? deltaSnapshots
+              : deltaSnapshots
+              ? [deltaSnapshots]
+              : [];
+            const deltaByKey = {};
+            deltaArr.forEach((d) => {
+              if (d && d.dateKey) deltaByKey[d.dateKey] = d;
+            });
+            return legacyArr.map((s) => {
+              const d = deltaByKey[s?.dateKey];
+              if (!d) return s;
+              return {
+                ...s,
+                loads: d.loads,
+                loadsState: d.loadsState,
+                loadsEvents: d.loadsEvents
+              };
+            });
+          })
         : await this.getSnapshotsForDateKeys(dateKeys, grain, entityType, entityId);
+
+      const snapshots = Array.isArray(rawSnapshots)
+        ? rawSnapshots
+        : rawSnapshots
+        ? [rawSnapshots]
+        : [];
 
       const statusesArray = statuses ? statuses.split(',').map(s => s.trim().toLowerCase()) : null;
       const paymentStatusesArray = paymentStatus ? paymentStatus.split(',').map(s => s.trim().toLowerCase()) : null;

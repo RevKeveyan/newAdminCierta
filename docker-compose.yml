@@ -23,11 +23,17 @@ services:
     restart: unless-stopped
     ports:
       - "6379:6379"
-    command: redis-server --appendonly yes --requirepass redis123
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "redis123"]
     volumes:
       - redis_data:/data
     networks:
       - cierta_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "redis123", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
 
   # Node.js Application
   app:
@@ -42,12 +48,15 @@ services:
       MONGO_URI: mongodb://admin:password123@mongodb:27017/cierta_db?authSource=admin
       MONGO_DB_NAME: cierta_db
       REDIS_URL: redis://:redis123@redis:6379
+      CACHE_ENABLED: "true"
       JWT_SECRET: your_jwt_secret_here
       JWT_EXPIRE: 7d
       ALLOWED_ORIGINS: http://localhost:3000,http://localhost:3001
     depends_on:
-      - mongodb
-      - redis
+      mongodb:
+        condition: service_started
+      redis:
+        condition: service_healthy
     volumes:
       - ./PDF-files:/app/PDF-files
     networks:

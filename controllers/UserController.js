@@ -305,7 +305,7 @@ class UserController extends UniversalBaseController {
       const { password, ...rest } = req.body;
       
       // Optimize bcrypt rounds for better performance (reduced from 10 to 8)
-      const hashedPassword = await bcrypt.hash(password, 8);
+      const hashedPassword = await bcrypt.hash(password, 12);
 
       const newUser = new this.model({
         ...rest,
@@ -453,7 +453,7 @@ class UserController extends UniversalBaseController {
       let originalPassword = null;
       if (updateData.password) {
         originalPassword = updateData.password;
-        updateData.password = await bcrypt.hash(updateData.password, 8);
+        updateData.password = await bcrypt.hash(updateData.password, 12);
       }
       
       // Обработка изображения профиля
@@ -813,7 +813,7 @@ class UserController extends UniversalBaseController {
       
       // Обработка пароля
       if (updateData.password) {
-        updateData.password = await bcrypt.hash(updateData.password, 8);
+        updateData.password = await bcrypt.hash(updateData.password, 12);
       }
       
       // Обработка изображения профиля

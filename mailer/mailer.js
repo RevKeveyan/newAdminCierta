@@ -2,6 +2,7 @@ const nodemailer = require("nodemailer");
 const fs = require("fs");
 const path = require("path");
 const dotenv = require("dotenv");
+const { buildLoadShipmentEmailHtml } = require("./buildLoadEmailBody");
 dotenv.config();
 
 const emailSendCache = new Map();
@@ -160,111 +161,8 @@ async function sendStatusUpdateMail(load, oldStatus, newStatus) {
 }
 
 function formatLoadDataForEmail(load, options = {}) {
-  const { isStatusUpdate = false, oldStatus = null, newStatus = null } = options;
-  
-  const formatDate = (dateValue) => {
-    if (!dateValue) return '';
-    try {
-      const date = new Date(dateValue);
-      if (isNaN(date.getTime())) {
-        return dateValue;
-      }
-      return date.toLocaleDateString('en-US', {
-        year: 'numeric',
-        month: 'long',
-        day: 'numeric'
-      });
-    } catch (error) {
-      return dateValue;
-    }
-  };
-  
-  const formatAddress = (address) => {
-    if (!address) return '';
-    const parts = [];
-    if (address.address) parts.push(address.address);
-    if (address.city) parts.push(address.city);
-    if (address.state) parts.push(address.state);
-    if (address.zipCode) parts.push(address.zipCode);
-    return parts.join(', ') || '';
-  };
-
-  const formatCarrierInfo = () => {
-    if (!load.carrier) return '';
-    const parts = ['<div style="margin-bottom: 20px; padding: 15px; background-color: #F4F4F4; border-radius: 5px;">'];
-    parts.push('<h4 style="color: #1D75BF; margin-top: 0;">Carrier Information</h4>');
-    const carrierName = load.carrier.name || load.carrier.companyName || '';
-    if (carrierName) parts.push(`<p><strong>Name:</strong> ${carrierName}</p>`);
-    if (load.carrier.email) parts.push(`<p><strong>Email:</strong> ${load.carrier.email}</p>`);
-    const contactPhone = load.carrier.phoneNumber || '';
-    if (contactPhone) parts.push(`<p><strong>Contact:</strong> ${contactPhone}</p>`);
-    parts.push('</div>');
-    return parts.join('');
-  };
-
-  const formatPickupInfo = () => {
-    if (!load.pickup) return '';
-    const parts = ['<div style="margin-bottom: 20px; padding: 15px; background-color: #E8F4F8; border-left: 4px solid #1D75BF; border-radius: 5px;">'];
-    parts.push('<h4 style="color: #1D75BF; margin-top: 0;">Pickup Location</h4>');
-    if (load.pickup.locationName) parts.push(`<p><strong>Location:</strong> ${load.pickup.locationName}</p>`);
-    const pickupAddr = formatAddress(load.pickup.address);
-    if (pickupAddr) parts.push(`<p><strong>Address:</strong> ${pickupAddr}</p>`);
-    parts.push('</div>');
-    return parts.join('');
-  };
-
-  const formatDeliveryInfo = () => {
-    if (!load.delivery) return '';
-    const parts = ['<div style="margin-bottom: 20px; padding: 15px; background-color: #E8F4F8; border-left: 4px solid #1D75BF; border-radius: 5px;">'];
-    parts.push('<h4 style="color: #1D75BF; margin-top: 0;">Delivery Location</h4>');
-    if (load.delivery.locationName) parts.push(`<p><strong>Location:</strong> ${load.delivery.locationName}</p>`);
-    const deliveryAddr = formatAddress(load.delivery.address);
-    if (deliveryAddr) parts.push(`<p><strong>Address:</strong> ${deliveryAddr}</p>`);
-    parts.push('</div>');
-    return parts.join('');
-  };
-
-  const formatDatesInfo = () => {
-    const parts = ['<div style="margin-bottom: 20px; padding: 15px; background-color: #F4F4F4; border-radius: 5px;">'];
-    parts.push('<h4 style="color: #1D75BF; margin-top: 0;">Important Dates</h4>');
-    let hasDates = false;
-    if (load.dates?.assignedDate) {
-      const formattedDate = formatDate(load.dates.assignedDate);
-      parts.push(`<p><strong>Assigned Date:</strong> ${formattedDate}</p>`);
-      hasDates = true;
-    }
-    if (load.dates?.pickupDate || load.pickup?.date) {
-      const dateValue = load.dates?.pickupDate || load.pickup?.date;
-      const formattedDate = formatDate(dateValue);
-      parts.push(`<p><strong>Pickup Date:</strong> ${formattedDate}</p>`);
-      hasDates = true;
-    }
-    if (load.dates?.deliveryDate || load.delivery?.date) {
-      const dateValue = load.dates?.deliveryDate || load.delivery?.date;
-      const formattedDate = formatDate(dateValue);
-      parts.push(`<p><strong>Delivery Date:</strong> ${formattedDate}</p>`);
-      hasDates = true;
-    }
-    parts.push('</div>');
-    return hasDates ? parts.join('') : '';
-  };
-
-  const emailTitle = isStatusUpdate ? 'Shipment Status Updated' : 'New Shipment Listed';
-  const statusChangeInfo = isStatusUpdate && oldStatus && newStatus 
-    ? `<p style="margin: 10px 0 0 0;"><s>${oldStatus}</s> → <strong>${newStatus}</strong></p>` 
-    : '';
-  const statusInfo = load.status ? `<p><strong>Status:</strong> <span style="color: #1D75BF; font-weight: bold;">${load.status}</span></p>` : '';
-
-  return {
-    emailTitle,
-    statusChangeInfo,
-    orderId: load.orderId || load._id?.toString() || 'N/A',
-    statusInfo,
-    carrierInfo: formatCarrierInfo(),
-    pickupInfo: formatPickupInfo(),
-    deliveryInfo: formatDeliveryInfo(),
-    datesInfo: formatDatesInfo(),
-  };
+  const emailBodyHtml = buildLoadShipmentEmailHtml(load, options);
+  return { emailBodyHtml };
 }
 
 async function sendLoadDetailsEmail(load, options = {}) {
@@ -346,7 +244,7 @@ async function sendLoadDetailsEmail(load, options = {}) {
       console.log(`[Mailer] Email ${index + 1}/${uniqueCarrierEmails.length}: Sending to carrier ${email}, CC (other carriers): ${ccEmails.join(', ') || 'none'}`);
       emailPromises.push(
         transporter.sendMail({
-          from: `"Cierta Corporation" <${process.env.EMAIL_USER}>`,
+          from: `"Cierta" <${process.env.EMAIL_USER}>`,
           to: email,
           cc: ccEmails.length > 0 ? ccEmails.join(', ') : undefined,
           subject,
@@ -370,11 +268,15 @@ async function sendLoadDetailsEmail(load, options = {}) {
       }
       sentEmails.add(email);
       
-      console.log(`[Mailer] Email ${index + 1}/${uniqueCustomerEmails.length}: Sending to customer ${email} (no CC)`);
+      const ccOtherCustomers = uniqueCustomerEmails.filter((e) => e !== email);
+      console.log(
+        `[Mailer] Email ${index + 1}/${uniqueCustomerEmails.length}: Sending to customer ${email}, CC (other customers): ${ccOtherCustomers.join(", ") || "none"}`
+      );
       emailPromises.push(
         transporter.sendMail({
-          from: `"Cierta Corporation" <${process.env.EMAIL_USER}>`,
+          from: `"Cierta" <${process.env.EMAIL_USER}>`,
           to: email,
+          cc: ccOtherCustomers.length > 0 ? ccOtherCustomers.join(", ") : undefined,
           subject,
           html,
         }).then(() => {
@@ -391,6 +293,73 @@ async function sendLoadDetailsEmail(load, options = {}) {
   return Promise.all(emailPromises);
 }
 
+function formatSendLoadFilesPlainToHtml(body) {
+  const trimmed = (body || "").trim();
+  const blocks = trimmed.split(/\n\n+/);
+  const inner = blocks
+    .map((block) => {
+      const withBreaks = block.trim().replace(/\n/g, "<br/>");
+      return `<p style="margin: 0 0 16px; color: #333; line-height: 1.5;">${withBreaks}</p>`;
+    })
+    .join("");
+  return `<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">${inner}</div>`;
+}
+
+function getSendLoadFilesEmailContent(orderId, mode) {
+  const idPart = orderId != null && String(orderId).trim() !== "" ? String(orderId).trim() : null;
+  const subjPrefix = idPart ? `${idPart}, ` : "";
+
+  if (mode === "both") {
+    const subject = `${subjPrefix}RC and BOL(s)`;
+    const text = `Hi Team,
+
+Please find the RC and BOL(s) enclosed herewith:
+
+Please sign the RC and send it back to us once you have a chance. The BOL(s) must be printed by a driver before getting to a shipper unless otherwise specified in writing.
+
+Thank you for your business!`;
+    return { subject, html: formatSendLoadFilesPlainToHtml(text), text };
+  }
+  if (mode === "rcOnly") {
+    const subject = `${subjPrefix}RC`;
+    const text = `Hi Team,
+
+Please find the RC enclosed herein:
+
+Please sign it and send it back to us once you have a chance.
+
+Thank you for your business!`;
+    return { subject, html: formatSendLoadFilesPlainToHtml(text), text };
+  }
+  const subject = `${subjPrefix}BOL(s)`;
+  const text = `Hi there,
+
+Please find the BOL(s) enclosed herein:
+
+Please let us know if you need anything else or if there are any questions.
+
+Thank you for allowing Cierta to be of service to your satisfaction!`;
+  return { subject, html: formatSendLoadFilesPlainToHtml(text), text };
+}
+
+async function sendLoadFilesEmail(to, orderId, attachments, mode) {
+  const { subject, html, text } = getSendLoadFilesEmailContent(orderId, mode);
+  const mailOptions = {
+    from: `"Cierta" <${process.env.EMAIL_USER}>`,
+    to,
+    subject,
+    html,
+    text,
+  };
+  if (Array.isArray(attachments) && attachments.length > 0) {
+    mailOptions.attachments = attachments.map((att) => ({
+      filename: att.filename || "document.pdf",
+      content: att.content,
+    }));
+  }
+  return transporter.sendMail(mailOptions);
+}
+
 module.exports = {
   sendSupportRequestMail,
   sendShippingRequestMail,
@@ -399,4 +368,5 @@ module.exports = {
   sendStatusUpdateMail,
   sendResetPasswordEmail,
   sendLoadDetailsEmail,
+  sendLoadFilesEmail,
 };

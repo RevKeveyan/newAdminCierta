@@ -127,6 +127,12 @@ router.delete(
   LoadController.delete
 );
 
+router.post(
+  '/bulk-delete',
+  verifyToken,
+  LoadController.bulkDelete
+);
+
 // 📄 PDF Generation (only via generate-pdf-btn in UI)
 router.post(
   '/generate-bol',
@@ -139,6 +145,11 @@ router.post(
   LoadController.generateRateConfirmation
 );
 router.post(
+  '/send-files',
+  verifyToken,
+  LoadController.sendFiles
+);
+router.post(
   '/:id/generate-bol',
   verifyToken,
   LoadController.generateBOL
@@ -147,6 +158,11 @@ router.post(
   '/:id/generate-rate-confirmation',
   verifyToken,
   LoadController.generateRateConfirmation
+);
+router.post(
+  '/:id/send-files',
+  verifyToken,
+  LoadController.sendFiles
 );
 
 // Note: File serving is now handled by /api/files/* endpoint

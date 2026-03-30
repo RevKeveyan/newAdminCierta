@@ -1,6 +1,37 @@
 const axios = require('axios');
 const { v4: uuidv4 } = require('uuid');
 
+function serializeLoadForEmailNotification(load) {
+  if (!load) return {};
+  const o = typeof load.toObject === 'function'
+    ? load.toObject({ depopulate: false })
+    : { ...load };
+  let carrier = o.carrier;
+  if (carrier && typeof carrier === 'object' && carrier._id) {
+    carrier = {
+      name: carrier.name,
+      companyName: carrier.companyName,
+      email: carrier.email,
+      phoneNumber: carrier.phoneNumber,
+    };
+  }
+  return {
+    _id: o._id,
+    orderId: o.orderId,
+    status: o.status,
+    type: o.type,
+    pickup: o.pickup || null,
+    delivery: o.delivery || null,
+    dates: o.dates || null,
+    vehicle: o.vehicle || null,
+    freight: o.freight || null,
+    loadCarrierPeople: Array.isArray(o.loadCarrierPeople) ? o.loadCarrierPeople : [],
+    carrier: carrier || null,
+    updatedAt: o.updatedAt,
+    createdAt: o.createdAt,
+  };
+}
+
 function hasStatusChange(changes) {
   if (!changes) {
     return false;
@@ -272,13 +303,7 @@ class NotificationService {
         orderId: load.orderId,
         oldStatus,
         newStatus,
-        load: {
-          id: load._id.toString(),
-          orderId: load.orderId,
-          status: newStatus,
-          customer: load.customer ? (typeof load.customer === 'object' ? load.customer._id : load.customer) : null,
-          carrier: load.carrier ? (typeof load.carrier === 'object' ? load.carrier._id : load.carrier) : null
-        },
+        load: serializeLoadForEmailNotification(load),
         updatedBy: updatedBy?.toString() || updatedBy
       },
       priority
@@ -334,13 +359,7 @@ class NotificationService {
       data: {
         loadId: load._id.toString(),
         orderId: load.orderId,
-        load: {
-          id: load._id.toString(),
-          orderId: load.orderId,
-          status: load.status,
-          customer: load.customer ? (typeof load.customer === 'object' ? load.customer._id : load.customer) : null,
-          carrier: load.carrier ? (typeof load.carrier === 'object' ? load.carrier._id : load.carrier) : null
-        },
+        load: serializeLoadForEmailNotification(load),
         createdBy: createdBy?.toString() || createdBy
       },
       priority: 'normal'

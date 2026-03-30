@@ -12,7 +12,7 @@ const notificationClient = require("../services/notificationClient");
 const loadService = require("../services/loadService");
 const customerService = require("../services/customerService");
 const carrierService = require("../services/carrierService");
-const { sendLoadDetailsEmail } = require("../mailer/mailer");
+const { sendLoadDetailsEmail, sendLoadFilesEmail } = require("../mailer/mailer");
 const {
   parseJsonField,
   filterNullValues,
@@ -45,6 +45,7 @@ const {
   deleteFromS3Multiple,
   extractKeyFromUrl,
   getSignedUrlForObject,
+  getObjectFromS3,
   uploadToS3,
 } = require("../services/s3Service");
 const fs = require("fs").promises;
@@ -61,7 +62,8 @@ const {
   normalizeObjectIdFields,
   getLoadsWithPagination,
 } = require("../utils/loadControllerHelpers");
-const { markDirtyForLoad, markDirtyDays } = require("../utils/markDirty");
+const { markDirtyForLoad, markDirtyDays, markDirtyForLoadChange } = require("../utils/markDirty");
+const { registerLoadStatsDelta } = require("../utils/statsDelta");
 const mongoose = require("mongoose");
 
 function normalizeLocationAddress(location) {
@@ -2468,9 +2470,14 @@ class LoadController extends UniversalBaseController {
           console.error("[LoadController] Error stack:", error.stack);
         });
 
-      markDirtyForLoad(populatedLoad, ['loads'])
+      markDirtyForLoadChange(null, populatedLoad, ['loads'])
         .catch((error) => {
           console.error("[LoadController] Failed to mark dirty for load:", error);
+        });
+
+      registerLoadStatsDelta(null, populatedLoad)
+        .catch((error) => {
+          console.error("[LoadController] Failed to register stats delta for load create:", error);
         });
 
       res.status(201).json({
@@ -2544,14 +2551,17 @@ class LoadController extends UniversalBaseController {
       );
       if (loadId) {
         const updateField = type === "bol" ? "bolDocuments" : "rateConfirmationDocuments";
+        const legacyPathField = type === "bol" ? "bolPdfPath" : "rateConfirmationPdfPath";
         const oldKeys = existingLoad && Array.isArray(existingLoad[updateField]) ? existingLoad[updateField] : [];
-        if (oldKeys.length > 0) {
-          deleteFromS3Multiple(oldKeys).catch((err) => {
+        const legacyKey = existingLoad && typeof existingLoad[legacyPathField] === "string" ? existingLoad[legacyPathField] : null;
+        const keysToDelete = [...oldKeys, legacyKey].filter(Boolean);
+        if (keysToDelete.length > 0) {
+          deleteFromS3Multiple(keysToDelete).catch((err) => {
             console.error("[LoadController] Error deleting previous PDF(s) from S3:", err);
           });
         }
         await this.model.findByIdAndUpdate(loadId, {
-          $set: { [updateField]: [key] },
+          $set: { [updateField]: [key], [legacyPathField]: key },
         });
       }
       const signedUrl = await getSignedUrlForObject(key, 3600);
@@ -2575,6 +2585,96 @@ class LoadController extends UniversalBaseController {
 
   generateBOL = (req, res) => this._generatePdfAndUpload(req, res, "bol");
   generateRateConfirmation = (req, res) => this._generatePdfAndUpload(req, res, "rateConfirmation");
+
+  sendFiles = async (req, res) => {
+    try {
+      const loadId = req.params.id || null;
+      const { recipients, attachmentKeys, loadData } = req.body;
+      if (!recipients || !Array.isArray(recipients) || recipients.length === 0) {
+        return res.status(400).json({ success: false, error: "recipients array is required" });
+      }
+      if (!attachmentKeys || typeof attachmentKeys !== "object") {
+        return res.status(400).json({ success: false, error: "attachmentKeys is required" });
+      }
+      const bolKeys = Array.isArray(attachmentKeys.bol) ? attachmentKeys.bol : [];
+      const rateConfKeys = Array.isArray(attachmentKeys.rateConfirmation) ? attachmentKeys.rateConfirmation : [];
+
+      let orderId = null;
+      if (loadId) {
+        const load = await this.model.findById(loadId).lean();
+        if (!load) {
+          return res.status(404).json({ success: false, error: "Load not found" });
+        }
+        orderId = load.orderId || loadId;
+      } else if (loadData && loadData.orderId) {
+        orderId = loadData.orderId;
+      }
+
+      const getKey = (k) => {
+        if (!k || typeof k !== "string") return null;
+        const key = k.replace(/^\/api\/files\//, "").replace(/^\/files\//, "").trim();
+        return key || null;
+      };
+
+      const results = [];
+      for (const r of recipients) {
+        const email = (r.email || "").trim();
+        if (!email) continue;
+        const includeBOL = !!r.includeBOL;
+        const includeRateConfirmation = !!r.includeRateConfirmation;
+        if (!includeBOL && !includeRateConfirmation) continue;
+
+        const keysToAttach = [];
+        if (includeBOL) keysToAttach.push(...bolKeys.map(getKey).filter(Boolean));
+        if (includeRateConfirmation) keysToAttach.push(...rateConfKeys.map(getKey).filter(Boolean));
+
+        if (keysToAttach.length === 0) continue;
+
+        const attachments = [];
+        for (const key of keysToAttach) {
+          const normalizedKey = extractKeyFromUrl(key) || key;
+          const obj = await getObjectFromS3(normalizedKey);
+          if (obj && obj.Body) {
+            const name = (obj.Metadata && obj.Metadata["original-filename"]) || key.split("/").pop() || "document.pdf";
+            attachments.push({ filename: name, content: obj.Body });
+          }
+        }
+
+        if (attachments.length === 0) {
+          results.push({ email, success: false, error: "No attachments could be read" });
+          continue;
+        }
+
+        let sendFilesMode = "bolOnly";
+        if (includeBOL && includeRateConfirmation) sendFilesMode = "both";
+        else if (includeRateConfirmation) sendFilesMode = "rcOnly";
+
+        try {
+          await sendLoadFilesEmail(email, orderId, attachments, sendFilesMode);
+          results.push({ email, success: true });
+        } catch (err) {
+          console.error("[LoadController] sendLoadFilesEmail error for", email, err);
+          results.push({ email, success: false, error: err.message });
+        }
+      }
+
+      const failed = results.filter((x) => !x.success);
+      if (failed.length === results.length) {
+        return res.status(500).json({
+          success: false,
+          error: "Failed to send all emails",
+          results,
+        });
+      }
+      return res.status(200).json({ success: true, results });
+    } catch (error) {
+      console.error("[LoadController] sendFiles error:", error);
+      return res.status(500).json({
+        success: false,
+        error: error.message || "Failed to send files",
+      });
+    }
+  };
 
   getRateConfirmationFieldMap = async (req, res) => {
     try {
@@ -2966,127 +3066,16 @@ class LoadController extends UniversalBaseController {
         }
       }
 
-      const datesToMark = [];
-      const oldCreatedAt = oldDoc.createdAt;
-      const newCreatedAt = updated.createdAt;
-      if (oldCreatedAt) datesToMark.push(oldCreatedAt);
-      if (newCreatedAt && oldCreatedAt?.toString() !== newCreatedAt?.toString()) {
-        datesToMark.push(newCreatedAt);
+      try {
+        await markDirtyForLoadChange(oldDoc, updated, ['loads']);
+      } catch (error) {
+        console.error("[LoadController] Failed to mark dirty for load update:", error);
       }
 
-      const currentOldStatus = oldDoc.status;
-      const currentNewStatus = updated.status;
-      const statusChanged = currentOldStatus && currentNewStatus && currentOldStatus !== currentNewStatus;
-      
-      if (statusChanged) {
-        const { getCurrentDateUTC5 } = require("../utils/dateUtils");
-        const { getDateKeyUTC5 } = require("../utils/dateKeyUtils");
-        const { getMonthKeyFromDay, getISOWeekKeyFromDay, getYearKeyFromDay } = require("../utils/periodKeys");
-        const { getMonthRangeFromKey, getWeekRangeFromKey, getYearRangeFromKey } = require("../utils/dateKeyUtils");
-        const { markDirtyPeriod } = require("../utils/markDirty");
-        
-        const today = getCurrentDateUTC5();
-        datesToMark.push(today);
-        
-        const todayKey = getDateKeyUTC5(today);
-        const weekKey = getISOWeekKeyFromDay(todayKey);
-        const monthKey = getMonthKeyFromDay(todayKey);
-        const yearKey = getYearKeyFromDay(todayKey);
-        
-        const periodPromises = [];
-        
-        if (weekKey) {
-          const weekRange = getWeekRangeFromKey(weekKey);
-          if (weekRange) {
-            periodPromises.push(markDirtyPeriod('week', weekKey, weekRange.start, weekRange.end, 'system', null, ['loads']));
-            if (oldDoc.customer) {
-              periodPromises.push(markDirtyPeriod('week', weekKey, weekRange.start, weekRange.end, 'customer', oldDoc.customer, ['loads']));
-            }
-            if (oldDoc.carrier) {
-              periodPromises.push(markDirtyPeriod('week', weekKey, weekRange.start, weekRange.end, 'carrier', oldDoc.carrier, ['loads']));
-            }
-            if (oldDoc.createdBy) {
-              periodPromises.push(markDirtyPeriod('week', weekKey, weekRange.start, weekRange.end, 'user', oldDoc.createdBy, ['loads']));
-            }
-          }
-        }
-        
-        if (monthKey) {
-          const monthRange = getMonthRangeFromKey(monthKey);
-          if (monthRange) {
-            periodPromises.push(markDirtyPeriod('month', monthKey, monthRange.start, monthRange.end, 'system', null, ['loads']));
-            if (oldDoc.customer) {
-              periodPromises.push(markDirtyPeriod('month', monthKey, monthRange.start, monthRange.end, 'customer', oldDoc.customer, ['loads']));
-            }
-            if (oldDoc.carrier) {
-              periodPromises.push(markDirtyPeriod('month', monthKey, monthRange.start, monthRange.end, 'carrier', oldDoc.carrier, ['loads']));
-            }
-            if (oldDoc.createdBy) {
-              periodPromises.push(markDirtyPeriod('month', monthKey, monthRange.start, monthRange.end, 'user', oldDoc.createdBy, ['loads']));
-            }
-          }
-        }
-        
-        if (yearKey) {
-          const yearRange = getYearRangeFromKey(yearKey);
-          if (yearRange) {
-            periodPromises.push(markDirtyPeriod('year', yearKey, yearRange.start, yearRange.end, 'system', null, ['loads']));
-            if (oldDoc.customer) {
-              periodPromises.push(markDirtyPeriod('year', yearKey, yearRange.start, yearRange.end, 'customer', oldDoc.customer, ['loads']));
-            }
-            if (oldDoc.carrier) {
-              periodPromises.push(markDirtyPeriod('year', yearKey, yearRange.start, yearRange.end, 'carrier', oldDoc.carrier, ['loads']));
-            }
-            if (oldDoc.createdBy) {
-              periodPromises.push(markDirtyPeriod('year', yearKey, yearRange.start, yearRange.end, 'user', oldDoc.createdBy, ['loads']));
-            }
-          }
-        }
-        
-        Promise.all(periodPromises).catch((error) => {
-          console.error("[LoadController] Failed to mark dirty periods for status change:", error);
+      registerLoadStatsDelta(oldDoc, updated)
+        .catch((error) => {
+          console.error("[LoadController] Failed to register stats delta for load update:", error);
         });
-      }
-
-      const oldCustomer = oldDoc.customer?.toString() || oldDoc.customer;
-      const newCustomer = updated.customer?.toString() || updated.customer;
-      const oldCarrier = oldDoc.carrier?.toString() || oldDoc.carrier;
-      const newCarrier = updated.carrier?.toString() || updated.carrier;
-      const oldCreatedBy = oldDoc.createdBy?.toString() || oldDoc.createdBy;
-      const newCreatedBy = updated.createdBy?.toString() || updated.createdBy;
-
-      if (datesToMark.length > 0) {
-        const promises = [];
-        
-        promises.push(markDirtyDays(datesToMark, 'system', null, ['loads']));
-        
-        if (oldCustomer) {
-          promises.push(markDirtyDays(datesToMark, 'customer', oldCustomer, ['loads']));
-        }
-        if (newCustomer && newCustomer !== oldCustomer) {
-          promises.push(markDirtyDays(datesToMark, 'customer', newCustomer, ['loads']));
-        }
-        
-        if (oldCarrier) {
-          promises.push(markDirtyDays(datesToMark, 'carrier', oldCarrier, ['loads']));
-        }
-        if (newCarrier && newCarrier !== oldCarrier) {
-          promises.push(markDirtyDays(datesToMark, 'carrier', newCarrier, ['loads']));
-        }
-        
-        if (oldCreatedBy) {
-          promises.push(markDirtyDays(datesToMark, 'user', oldCreatedBy, ['loads']));
-        }
-        if (newCreatedBy && newCreatedBy !== oldCreatedBy) {
-          promises.push(markDirtyDays(datesToMark, 'user', newCreatedBy, ['loads']));
-        }
-        
-        try {
-          await Promise.all(promises);
-        } catch (error) {
-          console.error("[LoadController] Failed to mark dirty for load update:", error);
-        }
-      }
 
       // Применение DTO
       let formattedDoc = formatDocument(this.dto, updated);
@@ -3688,9 +3677,18 @@ class LoadController extends UniversalBaseController {
       }
 
       // Distribute uploaded files by type
-      // ВАЖНО: upload НИКОГДА не должен привести к удалению старых ключей
-      // processUploadedFilesForUpdate делает merge: [...existing, ...newKeys]
       processUploadedFilesForUpdate(updateData, oldDoc, req.uploadedFiles);
+
+      if (req.uploadedFiles?.bolDocuments?.length > 0 && Array.isArray(oldDoc.bolDocuments) && oldDoc.bolDocuments.length > 0) {
+        deleteFromS3Multiple(oldDoc.bolDocuments).catch((err) => {
+          console.error("[LoadController] Error deleting previous BOL from S3:", err);
+        });
+      }
+      if (req.uploadedFiles?.rateConfirmationDocuments?.length > 0 && Array.isArray(oldDoc.rateConfirmationDocuments) && oldDoc.rateConfirmationDocuments.length > 0) {
+        deleteFromS3Multiple(oldDoc.rateConfirmationDocuments).catch((err) => {
+          console.error("[LoadController] Error deleting previous Rate Confirmation from S3:", err);
+        });
+      }
 
       // Final cleanup: ensure vehicle/freight have correct structure
       // Both fields will be synced for DB, but vehicleImages/freightImages are primary
@@ -3861,16 +3859,25 @@ class LoadController extends UniversalBaseController {
           filteredData.tonu = cleanedUpdateData.tonu;
         }
       }
-      
-      // Preserve people arrays before removeUndefinedNullValues
+      if (cleanedUpdateData.bolDocuments !== undefined) {
+        filteredData.bolDocuments = Array.isArray(cleanedUpdateData.bolDocuments) ? cleanedUpdateData.bolDocuments : [];
+      }
+      if (cleanedUpdateData.rateConfirmationDocuments !== undefined) {
+        filteredData.rateConfirmationDocuments = Array.isArray(cleanedUpdateData.rateConfirmationDocuments) ? cleanedUpdateData.rateConfirmationDocuments : [];
+      }
+      if (cleanedUpdateData.documents !== undefined) {
+        filteredData.documents = Array.isArray(cleanedUpdateData.documents) ? cleanedUpdateData.documents : [];
+      }
+
       const preservedLoadCarrierPeople3 = filteredData.loadCarrierPeople;
       const preservedLoadCustomerRepresentativePeoples3 = filteredData.loadCustomerRepresentativePeoples;
+      const preservedBolDocuments = filteredData.bolDocuments;
+      const preservedRateConfirmationDocuments = filteredData.rateConfirmationDocuments;
+      const preservedDocuments = filteredData.documents;
 
-      // Удаляем все остальные undefined/null значения из filteredData
       const { removeUndefinedNullValues } = require('../utils/dataHelpers');
       const finalData = removeUndefinedNullValues(filteredData);
-      
-      // Применяем очищенные данные
+
       Object.keys(finalData).forEach(key => {
         if (finalData[key] === undefined || finalData[key] === null) {
           delete filteredData[key];
@@ -3879,14 +3886,35 @@ class LoadController extends UniversalBaseController {
         }
       });
 
-      // Restore people arrays after removeUndefinedNullValues
       if (preservedLoadCarrierPeople3 !== undefined) {
         filteredData.loadCarrierPeople = preservedLoadCarrierPeople3;
-        console.log(`[LoadController.updateLoad] Restored loadCarrierPeople after removeUndefinedNullValues: ${filteredData.loadCarrierPeople.length} people`);
       }
       if (preservedLoadCustomerRepresentativePeoples3 !== undefined) {
         filteredData.loadCustomerRepresentativePeoples = preservedLoadCustomerRepresentativePeoples3;
-        console.log(`[LoadController.updateLoad] Restored loadCustomerRepresentativePeoples after removeUndefinedNullValues: ${filteredData.loadCustomerRepresentativePeoples.length} people`);
+      }
+      if (preservedBolDocuments !== undefined) {
+        filteredData.bolDocuments = preservedBolDocuments;
+      }
+      if (preservedRateConfirmationDocuments !== undefined) {
+        filteredData.rateConfirmationDocuments = preservedRateConfirmationDocuments;
+      }
+      if (preservedDocuments !== undefined) {
+        filteredData.documents = preservedDocuments;
+      }
+
+      const nextStatus = filteredData.status !== undefined ? filteredData.status : oldDoc.status;
+      if (nextStatus === "Picked Up" || nextStatus === "Delivered") {
+        const existingDates = oldDoc.dates && typeof oldDoc.dates === 'object'
+          ? (oldDoc.dates.toObject ? oldDoc.dates.toObject() : oldDoc.dates)
+          : {};
+        const effectiveDates = { ...existingDates, ...(filteredData.dates || {}) };
+        if (nextStatus === "Picked Up" && !effectiveDates.pickupAt) {
+          effectiveDates.pickupAt = new Date();
+        }
+        if (nextStatus === "Delivered" && !effectiveDates.deliveryAt) {
+          effectiveDates.deliveryAt = new Date();
+        }
+        filteredData.dates = effectiveDates;
       }
 
       // Добавляем updatedBy если есть пользователь
@@ -4059,7 +4087,17 @@ class LoadController extends UniversalBaseController {
           }
         }
 
-        // Only send load_updated notification (not status changes or assignments)
+        try {
+          await markDirtyForLoadChange(oldDoc, updated, ['loads']);
+        } catch (error) {
+          console.error("[LoadController] Failed to mark dirty for load status update:", error);
+        }
+
+        registerLoadStatsDelta(oldDoc, updated)
+          .catch((error) => {
+            console.error("[LoadController] Failed to register stats delta for status update:", error);
+          });
+
         let formattedDoc = formatDocument(this.dto, updated);
         formattedDoc = maybeStripPaymentFields(req.user?.role, formattedDoc);
 
@@ -4254,6 +4292,19 @@ class LoadController extends UniversalBaseController {
           updateData.fees = [];
         }
       }
+
+      const incomingDates = (req.body.load && req.body.load.dates) || req.body.dates || {};
+      const existingDates = oldDoc.dates
+        ? (typeof oldDoc.dates.toObject === 'function' ? oldDoc.dates.toObject() : oldDoc.dates)
+        : {};
+      const mergedDates = { ...existingDates, ...incomingDates };
+      if (status === "Picked Up" && !mergedDates.pickupAt) {
+        mergedDates.pickupAt = new Date();
+      }
+      if (status === "Delivered" && !mergedDates.deliveryAt) {
+        mergedDates.deliveryAt = new Date();
+      }
+      updateData.dates = mergedDates;
 
       const willCreatePayments =
         status === "Delivered" && oldDoc.status !== "Delivered";
@@ -4452,6 +4503,17 @@ class LoadController extends UniversalBaseController {
         .populate("createdBy")
         .populate("updatedBy");
 
+      try {
+        await markDirtyForLoadChange(null, populated, ['loads']);
+      } catch (error) {
+        console.error("[LoadController] Failed to mark dirty for duplicated load:", error);
+      }
+
+      registerLoadStatsDelta(null, populated)
+        .catch((error) => {
+          console.error("[LoadController] Failed to register stats delta for duplicated load:", error);
+        });
+
       let formattedDoc = formatDocument(this.dto, populated);
       formattedDoc = maybeStripPaymentFields(req.user?.role, formattedDoc);
 
@@ -4507,14 +4569,14 @@ class LoadController extends UniversalBaseController {
       }
 
       const loadForDelete = await this.model.findById(id)
-        .select('createdAt customer carrier createdBy')
+        .select('createdAt updatedAt dates customer carrier createdBy status')
         .lean();
 
       const actor = createActor(req.user);
       await loadService.deleteLoad(id, actor);
 
       if (loadForDelete) {
-        markDirtyForLoad(loadForDelete, ['loads'])
+        markDirtyForLoadChange(loadForDelete, null, ['loads'])
           .catch((error) => {
             console.error("[LoadController] Failed to mark dirty for load delete:", error);
           });

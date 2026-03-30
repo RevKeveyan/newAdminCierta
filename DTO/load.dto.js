@@ -287,6 +287,7 @@ function toLoadDTO(load = {}) {
       if (person && typeof person === 'object') {
         return {
           id: person._id || person.id,
+          type: person.type,
           fullName: person.fullName,
           email: person.email,
           phoneNumber: person.phoneNumber

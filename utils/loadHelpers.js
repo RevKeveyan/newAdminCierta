@@ -295,16 +295,10 @@ function processUploadedFiles(loadDocument, uploadedFiles, vehicleData, freightD
   }
 
   if (uploadedFiles.bolDocuments?.length > 0) {
-    loadDocument.bolDocuments = [
-      ...(loadDocument.bolDocuments || []),
-      ...uploadedFiles.bolDocuments,
-    ];
+    loadDocument.bolDocuments = [...uploadedFiles.bolDocuments];
   }
   if (uploadedFiles.rateConfirmationDocuments?.length > 0) {
-    loadDocument.rateConfirmationDocuments = [
-      ...(loadDocument.rateConfirmationDocuments || []),
-      ...uploadedFiles.rateConfirmationDocuments,
-    ];
+    loadDocument.rateConfirmationDocuments = [...uploadedFiles.rateConfirmationDocuments];
   }
   if (uploadedFiles.documents?.length > 0) {
     loadDocument.documents = [

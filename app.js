@@ -248,7 +248,20 @@ mongoose
     process.on("SIGTERM", shutdown("SIGTERM"));
   })
   .catch((error) => {
-    console.error("MongoDB connection error:", error);
+    const message = error?.message || "Unknown MongoDB connection error";
+    const lowerMessage = message.toLowerCase();
+    const looksLikeNetworkIssue =
+      lowerMessage.includes("server selection") ||
+      lowerMessage.includes("replicasetnoprimary") ||
+      lowerMessage.includes("enotfound") ||
+      lowerMessage.includes("eai_again");
+
+    if (looksLikeNetworkIssue) {
+      console.error(`MongoDB connection error: ${message}`);
+      console.error("Hint: check DNS resolution and outbound access to *.mongodb.net:27017.");
+    } else {
+      console.error(`MongoDB connection error: ${message}`);
+    }
     process.exit(1);
   });
 

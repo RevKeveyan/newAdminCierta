@@ -50,6 +50,25 @@ const statsSnapshotSchema = new mongoose.Schema({
     }
   },
   
+  loadsState: {
+    listed: { type: Number, default: 0 },
+    dispatched: { type: Number, default: 0 },
+    pickedUp: { type: Number, default: 0 },
+    delivered: { type: Number, default: 0 },
+    onHold: { type: Number, default: 0 },
+    cancelled: { type: Number, default: 0 },
+    expired: { type: Number, default: 0 }
+  },
+  
+  loadsEvents: {
+    created: { type: Number, default: 0 },
+    dispatched: { type: Number, default: 0 },
+    pickedUp: { type: Number, default: 0 },
+    delivered: { type: Number, default: 0 },
+    onHold: { type: Number, default: 0 },
+    cancelled: { type: Number, default: 0 }
+  },
+  
   receivable: {
     totalCount: { type: Number, default: 0 },
     money: {

@@ -232,6 +232,147 @@ async function markDirtyForLoad(load, sources = ['loads']) {
 }
 
 /**
+ * Marks load changes as dirty for statistics recalculation
+ * @param {Object|null} oldLoad - Previous Load document (or null on create)
+ * @param {Object|null} newLoad - New Load document (or null on delete)
+ * @param {string[]} sources - Sources array (usually ['loads'])
+ * @returns {Promise<void>}
+ */
+async function markDirtyForLoadChange(oldLoad, newLoad, sources = ['loads']) {
+  try {
+    if (!Array.isArray(sources) || sources.length === 0) {
+      return;
+    }
+
+    const validSources = sources.filter(s => ['loads', 'receivable', 'payable'].includes(s));
+    if (validSources.length === 0) {
+      return;
+    }
+
+    const oldDoc = oldLoad || {};
+    const newDoc = newLoad || {};
+
+    const dateCandidates = [];
+
+    const pushDate = (value) => {
+      if (!value) return;
+      const d = value instanceof Date ? value : new Date(value);
+      if (isNaN(d.getTime())) return;
+      dateCandidates.push(d);
+    };
+
+    pushDate(oldDoc.createdAt);
+    pushDate(newDoc.createdAt);
+    pushDate(oldDoc.updatedAt);
+    pushDate(newDoc.updatedAt);
+
+    if (oldDoc.dates) {
+      pushDate(oldDoc.dates.pickupAt);
+      pushDate(oldDoc.dates.deliveryAt);
+      pushDate(oldDoc.dates.deadlineAt);
+    }
+    if (newDoc.dates) {
+      pushDate(newDoc.dates.pickupAt);
+      pushDate(newDoc.dates.deliveryAt);
+      pushDate(newDoc.dates.deadlineAt);
+    }
+
+    const hasStatusChange = oldDoc.status && newDoc.status && oldDoc.status !== newDoc.status;
+    const hasCreatedAtChange = oldDoc.createdAt && newDoc.createdAt && oldDoc.createdAt.toString() !== newDoc.createdAt.toString();
+
+    const getDatesFieldValue = (doc, key) => {
+      if (!doc || !doc.dates) return null;
+      if (doc.dates[key]) return doc.dates[key];
+      if (key === 'deadlineAt' && doc.dates.deadline) return doc.dates.deadline;
+      return null;
+    };
+
+    const hasPickupChange = String(getDatesFieldValue(oldDoc, 'pickupAt') || '') !== String(getDatesFieldValue(newDoc, 'pickupAt') || '');
+    const hasDeliveryChange = String(getDatesFieldValue(oldDoc, 'deliveryAt') || '') !== String(getDatesFieldValue(newDoc, 'deliveryAt') || '');
+    const hasDeadlineChange = String(getDatesFieldValue(oldDoc, 'deadlineAt') || '') !== String(getDatesFieldValue(newDoc, 'deadlineAt') || '');
+
+    const normalizeId = (value) => {
+      if (!value) return '';
+      if (typeof value === 'string') return value;
+      if (value.toString) return value.toString();
+      return String(value);
+    };
+
+    const hasCustomerChange = normalizeId(oldDoc.customer) !== normalizeId(newDoc.customer);
+    const hasCarrierChange = normalizeId(oldDoc.carrier) !== normalizeId(newDoc.carrier);
+    const hasCreatedByChange = normalizeId(oldDoc.createdBy) !== normalizeId(newDoc.createdBy);
+
+    const hasSignificantChange =
+      hasStatusChange ||
+      hasCreatedAtChange ||
+      hasPickupChange ||
+      hasDeliveryChange ||
+      hasDeadlineChange ||
+      hasCustomerChange ||
+      hasCarrierChange ||
+      hasCreatedByChange;
+
+    if (hasSignificantChange) {
+      pushDate(new Date());
+    }
+
+    if (dateCandidates.length === 0) {
+      return;
+    }
+
+    const uniqueDatesMap = new Map();
+    dateCandidates.forEach((d) => {
+      const key = getDateKeyUTC5(d);
+      if (!uniqueDatesMap.has(key)) {
+        uniqueDatesMap.set(key, d);
+      }
+    });
+
+    const uniqueDates = Array.from(uniqueDatesMap.values());
+    if (uniqueDates.length === 0) {
+      return;
+    }
+
+    const entities = [];
+
+    entities.push({ entityType: 'system', entityId: null });
+
+    const pushEntity = (entityType, entityId) => {
+      if (!entityId) return;
+      entities.push({ entityType, entityId });
+    };
+
+    pushEntity('customer', oldDoc.customer);
+    pushEntity('carrier', oldDoc.carrier);
+    pushEntity('user', oldDoc.createdBy);
+
+    pushEntity('customer', newDoc.customer);
+    pushEntity('carrier', newDoc.carrier);
+    pushEntity('user', newDoc.createdBy);
+
+    const uniqueEntitiesMap = new Map();
+    entities.forEach((e) => {
+      const idStr = e.entityId && e.entityId.toString ? e.entityId.toString() : String(e.entityId || '');
+      const key = `${e.entityType}:${idStr || 'null'}`;
+      if (!uniqueEntitiesMap.has(key)) {
+        uniqueEntitiesMap.set(key, e);
+      }
+    });
+
+    const uniqueEntities = Array.from(uniqueEntitiesMap.values());
+    if (uniqueEntities.length === 0) {
+      return;
+    }
+
+    await Promise.all(
+      uniqueEntities.map((e) => markDirtyDays(uniqueDates, e.entityType, e.entityId || null, validSources))
+    );
+  } catch (error) {
+    console.error('[markDirty] markDirtyForLoadChange error:', error);
+  }
+}
+
+/**
  * Помечает Payment как "грязный" для пересчёта статистики
  * @param {Object} payment - Payment документ (PaymentReceivable или PaymentPayable)
  * @param {string} paymentType - 'receivable' | 'payable'
@@ -277,5 +418,6 @@ module.exports = {
   markDirtyDay,
   markDirtyDays,
   markDirtyForLoad,
-  markDirtyForPayment
+  markDirtyForPayment,
+  markDirtyForLoadChange
 };

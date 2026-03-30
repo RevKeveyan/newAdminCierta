@@ -383,7 +383,9 @@ const uploadFiles = (entity, multiple = true) => {
       { name: 'pickupImages', maxCount: 100 },
       { name: 'deliveryImages', maxCount: 100 },
       { name: 'carrierPhotos', maxCount: 100 },
-      { name: 'documents', maxCount: 100 }
+      { name: 'documents', maxCount: 100 },
+      { name: 'bolDocuments', maxCount: 100 },
+      { name: 'rateConfirmationDocuments', maxCount: 100 }
     ];
     
     const handler = upload.fields(fieldNames);
@@ -408,7 +410,9 @@ const uploadFiles = (entity, multiple = true) => {
           pickupImages: [],
           deliveryImages: [],
           carrierPhotos: [],
-          documents: []
+          documents: [],
+          bolDocuments: [],
+          rateConfirmationDocuments: []
         };
         
         // Process each field type separately, with parallel processing for better performance
@@ -420,7 +424,9 @@ const uploadFiles = (entity, multiple = true) => {
           pickupImages: 'pickup',
           deliveryImages: 'delivery',
           carrierPhotos: 'carrier',
-          documents: 'documents'
+          documents: 'documents',
+          bolDocuments: 'bol',
+          rateConfirmationDocuments: 'rateConfirmation'
         };
 
         for (const fieldName of fieldNames.map(f => f.name)) {

@@ -1,12 +1,44 @@
 const StatsDirty = require('../models/subModels/StatsDirty');
 const StatsSnapshot = require('../models/subModels/StatsSnapshot');
+const StatsDailyDelta = require('../models/subModels/StatsDailyDelta');
 const Load = require('../models/Load');
 const PaymentReceivable = require('../models/subModels/PaymentReceivable');
 const PaymentPayable = require('../models/subModels/PaymentPayable');
 const { STATISTICS_DATE_SOURCES, StatisticsDateHelpers } = require('../config/statisticsDateConstants');
-const { getDaysInRange, getDateRangeFromKey } = require('../utils/dateKeyUtils');
+const { getDaysInRange, getDateRangeFromKey, getDateKeyUTC5 } = require('../utils/dateKeyUtils');
 const mongoose = require('mongoose');
 const { v4: uuidv4 } = require('uuid');
+
+const ZERO_STATE = {
+  listed: 0,
+  dispatched: 0,
+  pickedUp: 0,
+  delivered: 0,
+  onHold: 0,
+  cancelled: 0,
+  expired: 0
+};
+
+const ZERO_EVENTS = {
+  created: 0,
+  dispatched: 0,
+  pickedUp: 0,
+  delivered: 0,
+  onHold: 0,
+  cancelled: 0
+};
+
+function applyStateDelta(prevState, delta) {
+  return {
+    listed: Math.max(0, (prevState.listed || 0) + (delta.listed || 0)),
+    dispatched: Math.max(0, (prevState.dispatched || 0) + (delta.dispatched || 0)),
+    pickedUp: Math.max(0, (prevState.pickedUp || 0) + (delta.pickedUp || 0)),
+    delivered: Math.max(0, (prevState.delivered || 0) + (delta.delivered || 0)),
+    onHold: Math.max(0, (prevState.onHold || 0) + (delta.onHold || 0)),
+    cancelled: Math.max(0, (prevState.cancelled || 0) + (delta.cancelled || 0)),
+    expired: Math.max(0, (prevState.expired || 0) + (delta.expired || 0))
+  };
+}
 
 const MAX_RETRY_ATTEMPTS = 3;
 const LOCK_TIMEOUT_MS = 5 * 60 * 1000;
@@ -67,6 +99,23 @@ async function computeSnapshot(rangeStart, rangeEnd, entityType, entityId) {
         expired: 0
       }
     },
+    loadsState: {
+      listed: 0,
+      dispatched: 0,
+      pickedUp: 0,
+      delivered: 0,
+      onHold: 0,
+      cancelled: 0,
+      expired: 0
+    },
+    loadsEvents: {
+      created: 0,
+      dispatched: 0,
+      pickedUp: 0,
+      delivered: 0,
+      onHold: 0,
+      cancelled: 0
+    },
     receivable: {
       totalCount: 0,
       money: {
@@ -117,11 +166,17 @@ async function computeSnapshot(rangeStart, rangeEnd, entityType, entityId) {
     'Cancelled': 'cancelled'
   };
 
+  let pickedUpEvents = 0;
+  let deliveredEvents = 0;
+
   deliveredAgg.forEach(item => {
     const statusKey = statusMap[item._id] || item._id?.toLowerCase() || 'unknown';
     if (snapshot.loads.byStatus.hasOwnProperty(statusKey) && statusKey === 'delivered') {
       snapshot.loads.byStatus.delivered = item.count;
       snapshot.loads.total += item.count;
+    }
+    if (statusKey === 'delivered') {
+      deliveredEvents += item.count;
     }
   });
   pickedUpAgg.forEach(item => {
@@ -130,13 +185,16 @@ async function computeSnapshot(rangeStart, rangeEnd, entityType, entityId) {
       snapshot.loads.byStatus.pickedUp = item.count;
       snapshot.loads.total += item.count;
     }
+    if (statusKey === 'pickedUp') {
+      pickedUpEvents += item.count;
+    }
   });
   createdAgg.forEach(item => {
     const statusKey = statusMap[item._id] || item._id?.toLowerCase() || 'unknown';
-    if (snapshot.loads.byStatus.hasOwnProperty(statusKey) && statusKey !== 'delivered' && statusKey !== 'pickedUp') {
-      snapshot.loads.byStatus[statusKey] = item.count;
-      snapshot.loads.total += item.count;
-    }
+    if (statusKey === 'delivered' || statusKey === 'pickedUp') return;
+    const key = snapshot.loads.byStatus.hasOwnProperty(statusKey) ? statusKey : 'listed';
+    snapshot.loads.byStatus[key] = (snapshot.loads.byStatus[key] || 0) + item.count;
+    snapshot.loads.total += item.count;
   });
 
   const expiredLoads = await Load.find({
@@ -162,6 +220,20 @@ async function computeSnapshot(rangeStart, rangeEnd, entityType, entityId) {
   });
 
   snapshot.loads.byStatus.expired = expiredCount;
+
+  snapshot.loadsEvents.created = createdAgg.reduce((sum, item) => sum + (item.count || 0), 0);
+  snapshot.loadsEvents.pickedUp = pickedUpEvents;
+  snapshot.loadsEvents.delivered = deliveredEvents;
+
+  snapshot.loadsState = {
+    listed: snapshot.loads.byStatus.listed || 0,
+    dispatched: snapshot.loads.byStatus.dispatched || 0,
+    pickedUp: snapshot.loads.byStatus.pickedUp || 0,
+    delivered: snapshot.loads.byStatus.delivered || 0,
+    onHold: snapshot.loads.byStatus.onHold || 0,
+    cancelled: snapshot.loads.byStatus.cancelled || 0,
+    expired: snapshot.loads.byStatus.expired || 0
+  };
 
   const basePaymentFilter = {};
   if (entityType === 'customer') {
@@ -259,11 +331,110 @@ async function computeSnapshot(rangeStart, rangeEnd, entityType, entityId) {
   return snapshot;
 }
 
+async function computeSnapshotFromDelta(rangeStart, rangeEnd, entityType, entityId) {
+  const dateKey = getDateKeyUTC5(rangeStart);
+  const prevDay = new Date(rangeStart);
+  prevDay.setUTCDate(prevDay.getUTCDate() - 1);
+  const prevDateKey = getDateKeyUTC5(prevDay);
+  const entityIdNorm = entityId && mongoose.Types.ObjectId.isValid(entityId) ? new mongoose.Types.ObjectId(entityId) : null;
+
+  const [prevSnapshot, deltaDoc] = await Promise.all([
+    StatsSnapshot.findOne({
+      grain: 'day',
+      dateKey: prevDateKey,
+      entityType,
+      entityId: entityIdNorm
+    }).lean(),
+    StatsDailyDelta.findOne({
+      dateKey,
+      entityType,
+      entityId: entityIdNorm
+    }).lean()
+  ]);
+
+  const prevState = prevSnapshot?.loadsState && typeof prevSnapshot.loadsState === 'object'
+    ? { ...ZERO_STATE, ...prevSnapshot.loadsState }
+    : { ...ZERO_STATE };
+  const deltaState = deltaDoc?.loadsStateDelta && typeof deltaDoc.loadsStateDelta === 'object'
+    ? deltaDoc.loadsStateDelta
+    : {};
+  const deltaEvents = deltaDoc?.loadsEventsDelta && typeof deltaDoc.loadsEventsDelta === 'object'
+    ? deltaDoc.loadsEventsDelta
+    : {};
+
+  const loadsState = applyStateDelta(prevState, deltaState);
+  const loadsEvents = {
+    created: deltaEvents.created || 0,
+    dispatched: deltaEvents.dispatched || 0,
+    pickedUp: deltaEvents.pickedUp || 0,
+    delivered: deltaEvents.delivered || 0,
+    onHold: deltaEvents.onHold || 0,
+    cancelled: deltaEvents.cancelled || 0
+  };
+
+  const total = (loadsState.listed || 0) + (loadsState.dispatched || 0) + (loadsState.pickedUp || 0) +
+    (loadsState.delivered || 0) + (loadsState.onHold || 0) + (loadsState.cancelled || 0);
+
+  return {
+    loads: {
+      total,
+      byStatus: { ...loadsState }
+    },
+    loadsState: { ...loadsState },
+    loadsEvents,
+    receivable: {
+      totalCount: 0,
+      money: { total: 0, confirmed: 0, outstanding: 0 }
+    },
+    payable: {
+      totalCount: 0,
+      money: { total: 0, confirmed: 0, outstanding: 0 }
+    },
+    finance: { profitConfirmed: 0 }
+  };
+}
+
+async function getDeltaSnapshotsForDateKeys({ dateKeys, entityType, entityId }) {
+  if (!Array.isArray(dateKeys) || dateKeys.length === 0) return [];
+  if (!entityType) return [];
+  if (entityType !== 'system' && !entityId) return [];
+
+  const entityIdNorm = entityId && mongoose.Types.ObjectId.isValid(entityId) ? new mongoose.Types.ObjectId(entityId) : null;
+
+  const results = [];
+  for (const dateKey of dateKeys) {
+    const range = getDateRangeFromKey(dateKey);
+    if (!range || !range.start) {
+      results.push({
+        grain: 'day',
+        dateKey,
+        entityType,
+        entityId: entityIdNorm,
+        ...emptySnapshotData()
+      });
+      continue;
+    }
+    const rangeEndExclusive = new Date(range.start);
+    rangeEndExclusive.setUTCDate(rangeEndExclusive.getUTCDate() + 1);
+    const snapshotData = await computeSnapshotFromDelta(range.start, rangeEndExclusive, entityType, entityIdNorm);
+    results.push({
+      grain: 'day',
+      dateKey,
+      entityType,
+      entityId: entityIdNorm,
+      ...snapshotData
+    });
+  }
+  return results;
+}
+
 const TZ_UTC5 = '-05:00';
 
 function emptySnapshotData() {
   return {
     loads: { total: 0, byStatus: { listed: 0, dispatched: 0, pickedUp: 0, delivered: 0, onHold: 0, cancelled: 0, expired: 0 } },
+    loadsState: { listed: 0, dispatched: 0, pickedUp: 0, delivered: 0, onHold: 0, cancelled: 0, expired: 0 },
+    loadsEvents: { created: 0, dispatched: 0, pickedUp: 0, delivered: 0, onHold: 0, cancelled: 0 },
     receivable: { totalCount: 0, money: { total: 0, confirmed: 0, outstanding: 0 } },
     payable: { totalCount: 0, money: { total: 0, confirmed: 0, outstanding: 0 } },
     finance: { profitConfirmed: 0 }
@@ -365,17 +536,23 @@ async function computeSnapshotsForCustomerIdsBatch(dateKeys, rangeStart, rangeEn
 
   const byDateKey = {};
   dateKeys.forEach((dk) => {
-    byDateKey[dk] = { ...emptySnapshotData(), loads: { ...emptySnapshotData().loads, byStatus: { ...emptySnapshotData().loads.byStatus } } };
+    const base = emptySnapshotData();
+    byDateKey[dk] = {
+      ...base,
+      loads: { ...base.loads, byStatus: { ...base.loads.byStatus } },
+      loadsState: { ...base.loadsState },
+      loadsEvents: { ...base.loadsEvents }
+    };
   });
 
   createdByDay.forEach(({ _id, count }) => {
     const d = byDateKey[_id.dateKey];
     if (!d) return;
-    const key = statusMap[_id.status] || _id.status?.toLowerCase() || 'listed';
-    if (key !== 'delivered' && key !== 'pickedUp' && d.loads.byStatus[key] !== undefined) {
-      d.loads.byStatus[key] = count;
-      d.loads.total += count;
-    }
+    const rawKey = statusMap[_id.status] || _id.status?.toLowerCase() || 'listed';
+    if (rawKey === 'delivered' || rawKey === 'pickedUp') return;
+    const key = d.loads.byStatus[rawKey] !== undefined ? rawKey : 'listed';
+    d.loads.byStatus[key] = (d.loads.byStatus[key] || 0) + count;
+    d.loads.total += count;
   });
   deliveredByDay.forEach(({ _id, count }) => {
     const d = byDateKey[_id.dateKey];
@@ -445,6 +622,8 @@ async function computeSnapshotForCustomerIds(rangeStart, rangeEnd, customerIds, 
   if (!baseLoadFilter) {
     return {
       loads: { total: 0, byStatus: { listed: 0, dispatched: 0, pickedUp: 0, delivered: 0, onHold: 0, cancelled: 0, expired: 0 } },
+      loadsState: { listed: 0, dispatched: 0, pickedUp: 0, delivered: 0, onHold: 0, cancelled: 0, expired: 0 },
+      loadsEvents: { created: 0, dispatched: 0, pickedUp: 0, delivered: 0, onHold: 0, cancelled: 0 },
       receivable: { totalCount: 0, money: { total: 0, confirmed: 0, outstanding: 0 } },
       payable: { totalCount: 0, money: { total: 0, confirmed: 0, outstanding: 0 } },
       finance: { profitConfirmed: 0 }
@@ -455,6 +634,8 @@ async function computeSnapshotForCustomerIds(rangeStart, rangeEnd, customerIds, 
 
   const snapshot = {
     loads: { total: 0, byStatus: { listed: 0, dispatched: 0, pickedUp: 0, delivered: 0, onHold: 0, cancelled: 0, expired: 0 } },
+    loadsState: { listed: 0, dispatched: 0, pickedUp: 0, delivered: 0, onHold: 0, cancelled: 0, expired: 0 },
+    loadsEvents: { created: 0, dispatched: 0, pickedUp: 0, delivered: 0, onHold: 0, cancelled: 0 },
     receivable: { totalCount: 0, money: { total: 0, confirmed: 0, outstanding: 0 } },
     payable: { totalCount: 0, money: { total: 0, confirmed: 0, outstanding: 0 } },
     finance: { profitConfirmed: 0 }
@@ -496,10 +677,10 @@ async function computeSnapshotForCustomerIds(rangeStart, rangeEnd, customerIds, 
   });
   createdAgg.forEach((item) => {
     const statusKey = statusMap[item._id] || item._id?.toLowerCase() || 'unknown';
-    if (snapshot.loads.byStatus.hasOwnProperty(statusKey) && statusKey !== 'delivered' && statusKey !== 'pickedUp') {
-      snapshot.loads.byStatus[statusKey] = item.count;
-      snapshot.loads.total += item.count;
-    }
+    if (statusKey === 'delivered' || statusKey === 'pickedUp') return;
+    const key = snapshot.loads.byStatus.hasOwnProperty(statusKey) ? statusKey : 'listed';
+    snapshot.loads.byStatus[key] = (snapshot.loads.byStatus[key] || 0) + item.count;
+    snapshot.loads.total += item.count;
   });
 
   const expiredLoads = await Load.find({
@@ -518,6 +699,26 @@ async function computeSnapshotForCustomerIds(rangeStart, rangeEnd, customerIds, 
     if (deadline < now) expiredCount++;
   });
   snapshot.loads.byStatus.expired = expiredCount;
+
+  snapshot.loadsEvents.created = createdAgg.reduce((sum, item) => sum + (item.count || 0), 0);
+  snapshot.loadsEvents.pickedUp = pickedUpAgg.reduce((sum, item) => {
+    const statusKey = statusMap[item._id] || item._id?.toLowerCase() || 'unknown';
+    return statusKey === 'pickedUp' ? sum + (item.count || 0) : sum;
+  }, 0);
+  snapshot.loadsEvents.delivered = deliveredAgg.reduce((sum, item) => {
+    const statusKey = statusMap[item._id] || item._id?.toLowerCase() || 'unknown';
+    return statusKey === 'delivered' ? sum + (item.count || 0) : sum;
+  }, 0);
+
+  snapshot.loadsState = {
+    listed: snapshot.loads.byStatus.listed || 0,
+    dispatched: snapshot.loads.byStatus.dispatched || 0,
+    pickedUp: snapshot.loads.byStatus.pickedUp || 0,
+    delivered: snapshot.loads.byStatus.delivered || 0,
+    onHold: snapshot.loads.byStatus.onHold || 0,
+    cancelled: snapshot.loads.byStatus.cancelled || 0,
+    expired: snapshot.loads.byStatus.expired || 0
+  };
 
   const receivableMatch = {
     ...basePaymentFilter,
@@ -707,6 +908,23 @@ async function aggregatePeriodFromDays(grain, dateKey, rangeStart, rangeEnd, ent
         expired: 0
       }
     },
+    loadsState: {
+      listed: 0,
+      dispatched: 0,
+      pickedUp: 0,
+      delivered: 0,
+      onHold: 0,
+      cancelled: 0,
+      expired: 0
+    },
+    loadsEvents: {
+      created: 0,
+      dispatched: 0,
+      pickedUp: 0,
+      delivered: 0,
+      onHold: 0,
+      cancelled: 0
+    },
     receivable: {
       totalCount: 0,
       money: {
@@ -742,6 +960,21 @@ async function aggregatePeriodFromDays(grain, dateKey, rangeStart, rangeEnd, ent
       }
     }
 
+    if (snapshot.loadsEvents) {
+      aggregated.loadsEvents.created += snapshot.loadsEvents.created || 0;
+      aggregated.loadsEvents.dispatched += snapshot.loadsEvents.dispatched || 0;
+      aggregated.loadsEvents.pickedUp += snapshot.loadsEvents.pickedUp || 0;
+      aggregated.loadsEvents.delivered += snapshot.loadsEvents.delivered || 0;
+      aggregated.loadsEvents.onHold += snapshot.loadsEvents.onHold || 0;
+      aggregated.loadsEvents.cancelled += snapshot.loadsEvents.cancelled || 0;
+    }
+
+    if (snapshot.dateKey && typeof snapshot.dateKey === 'string') {
+      if (!aggregated._lastStateSnapshot || snapshot.dateKey > aggregated._lastStateSnapshot.dateKey) {
+        aggregated._lastStateSnapshot = snapshot;
+      }
+    }
+
     if (snapshot.receivable) {
       aggregated.receivable.totalCount += snapshot.receivable.totalCount || 0;
       if (snapshot.receivable.money) {
@@ -764,6 +997,21 @@ async function aggregatePeriodFromDays(grain, dateKey, rangeStart, rangeEnd, ent
       aggregated.finance.profitConfirmed += snapshot.finance.profitConfirmed || 0;
     }
   });
+
+  if (aggregated._lastStateSnapshot && aggregated._lastStateSnapshot.loadsState) {
+    const s = aggregated._lastStateSnapshot.loadsState;
+    aggregated.loadsState = {
+      listed: s.listed || 0,
+      dispatched: s.dispatched || 0,
+      pickedUp: s.pickedUp || 0,
+      delivered: s.delivered || 0,
+      onHold: s.onHold || 0,
+      cancelled: s.cancelled || 0,
+      expired: s.expired || 0
+    };
+  }
+
+  delete aggregated._lastStateSnapshot;
 
   aggregated.receivable.money.outstanding = aggregated.receivable.money.total - aggregated.receivable.money.confirmed;
   aggregated.payable.money.outstanding = aggregated.payable.money.total - aggregated.payable.money.confirmed;
@@ -877,6 +1125,9 @@ async function startWorker(workerId = `worker-${uuidv4()}`, options = {}) {
 module.exports = {
   lockTask,
   computeSnapshot,
+  computeSnapshotFromDelta,
+  getDeltaSnapshotsForDateKeys,
+  applyStateDelta,
   computeSnapshotForCustomerIds,
   computeSnapshotsForCustomerIdsBatch,
   upsertSnapshot,

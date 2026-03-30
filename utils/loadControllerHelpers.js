@@ -435,10 +435,10 @@ function processDeletedFiles(oldDoc, loadData) {
 }
 
 /**
- * Обрабатывает загруженные файлы для updateLoad
- * КОНТРАКТ: upload НИКОГДА не должен привести к удалению старых ключей
- * - Если patch[field] присутствует (массив keys) => merged = unique([...patch[field], ...newKeys])
- * - Иначе => merged = unique([...oldDoc[field], ...newKeys])
+ * Processes uploaded files for load update.
+ * - Vehicle/freight/pickup/delivery/carrierPhotos/documents: merge new keys with existing (additive).
+ * - bolDocuments, rateConfirmationDocuments: replace only (single doc per type). Caller must delete
+ *   previous files from S3 when new uploads are present.
  */
 function processUploadedFilesForUpdate(updateData, oldDoc, uploadedFiles) {
   if (!uploadedFiles) return;
@@ -511,20 +511,10 @@ function processUploadedFilesForUpdate(updateData, oldDoc, uploadedFiles) {
   }
 
   if (uploadedFiles.bolDocuments?.length > 0) {
-    const newKeys = uploadedFiles.bolDocuments;
-    const patchKeys = updateData.bolDocuments || [];
-    const existingKeys = patchKeys.length > 0 
-      ? patchKeys 
-      : (oldDoc.bolDocuments || []);
-    updateData.bolDocuments = getUniqueKeys(existingKeys, newKeys);
+    updateData.bolDocuments = [...uploadedFiles.bolDocuments];
   }
   if (uploadedFiles.rateConfirmationDocuments?.length > 0) {
-    const newKeys = uploadedFiles.rateConfirmationDocuments;
-    const patchKeys = updateData.rateConfirmationDocuments || [];
-    const existingKeys = patchKeys.length > 0 
-      ? patchKeys 
-      : (oldDoc.rateConfirmationDocuments || []);
-    updateData.rateConfirmationDocuments = getUniqueKeys(existingKeys, newKeys);
+    updateData.rateConfirmationDocuments = [...uploadedFiles.rateConfirmationDocuments];
   }
   if (uploadedFiles.documents?.length > 0) {
     const newKeys = uploadedFiles.documents;

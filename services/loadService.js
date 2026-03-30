@@ -37,6 +37,8 @@ const ALLOWED_UPDATE_FIELDS = [
   'notes',
   'documents',
   'images',
+  'bolDocuments',
+  'rateConfirmationDocuments',
   'paymentMethod',
   'paymentTerms',
   'fees',
