@@ -1,0 +1,993 @@
+const mongoose = require('mongoose');
+const cacheService = require('../services/cacheService');
+
+/**
+ * Универсальный базовый контроллер для всех моделей
+ * Поддерживает CRUD операции, пагинацию, фильтрацию, историю изменений, DTO, валидацию
+ */
+class UniversalBaseController {
+  constructor(model, options = {}) {
+    this.model = model;
+    this.modelName = model.modelName || 'Model';
+    this.historyModel = options.historyModel || null;
+    this.dto = options.dto || null;
+    this.validationRules = options.validationRules || {};
+    this.populateFields = options.populateFields || [];
+    this.searchFields = options.searchFields || ['name', 'title', 'email'];
+    this.defaultSort = options.defaultSort || { createdAt: -1 };
+    this.softDelete = options.softDelete || false;
+    this.auditFields = options.auditFields || ['createdBy', 'updatedBy'];
+    
+    // Security: Whitelist for filters and sort fields
+    this.allowedFilters = options.allowedFilters || [];
+    this.allowedSortFields = options.allowedSortFields || ['createdAt', 'updatedAt'];
+  }
+
+  /**
+   * Получить все записи с поддержкой пагинации, фильтрации и сортировки
+   */
+  getAll = async (req, res) => {
+    try {
+      const {
+        page = 1,
+        limit: requestedLimit = 20, // Default 20 instead of 10
+        sortBy = 'createdAt',
+        sortOrder = 'desc',
+        search,
+        ...filters
+      } = req.query;
+      
+      // Security: Enforce max limit
+      const limit = Math.min(parseInt(requestedLimit), 100); // Max 100 items per page
+
+      // Исключаем параметры пагинации и сортировки из фильтров
+      const filterParams = { ...filters };
+      delete filterParams.page;
+      delete filterParams.limit;
+      delete filterParams.sortBy;
+      delete filterParams.sortOrder;
+      delete filterParams.search;
+
+      // Построение фильтра
+      const filter = this.buildFilter(filterParams, search);
+      
+      // Построение сортировки
+      const sort = this.buildSort(sortBy, sortOrder);
+
+      // Enable Redis Caching
+      const cacheService = require('../services/cacheService');
+      const cacheKey = `getAll:${this.modelName}:${JSON.stringify({ filter, sort, page, limit })}`;
+      const cached = await cacheService.get(cacheKey);
+      
+      if (cached) {
+        return res.status(200).json(cached);
+      }
+
+      // Выполнение запроса с оптимизацией
+      const docs = await this.model
+        .find(filter)
+        .populate(this.populateFields)
+        .sort(sort)
+        .skip((page - 1) * limit)
+        .limit(parseInt(limit))
+        .lean(); // Add lean() for better performance
+
+      const total = await this.model.countDocuments(filter);
+
+      // Применение DTO если есть
+      const formattedDocs = this.dto ? docs.map(doc => this.dto.format(doc)) : docs;
+
+      const response = {
+        success: true,
+        data: formattedDocs,
+        pagination: {
+          total,
+          totalPages: Math.ceil(total / limit),
+          currentPage: parseInt(page),
+          limit: parseInt(limit)
+        }
+      };
+
+      // Cache the response for 5 minutes (300 seconds)
+      await cacheService.set(cacheKey, response, 300);
+
+      res.status(200).json(response);
+    } catch (error) {
+      this.handleError(res, error, 'Failed to fetch records');
+    }
+  };
+
+  /**
+   * Получить запись по ID
+   */
+  getById = async (req, res) => {
+    try {
+      const { id } = req.params;
+      
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        return res.status(400).json({
+          success: false,
+          error: 'Invalid ID format'
+        });
+      }
+
+      const doc = await this.model
+        .findById(id)
+        .populate(this.populateFields);
+
+      if (!doc) {
+        return res.status(404).json({
+          success: false,
+          error: `${this.modelName} not found`
+        });
+      }
+
+      const formattedDoc = this.dto ? this.dto.format(doc) : doc;
+
+      res.status(200).json({
+        success: true,
+        data: formattedDoc
+      });
+    } catch (error) {
+      this.handleError(res, error, 'Failed to fetch record');
+    }
+  };
+
+  /**
+   * Создать новую запись
+   */
+  create = async (req, res) => {
+    try {
+      // Валидация данных
+      if (this.validationRules.create) {
+        const validation = this.validateData(req.body, this.validationRules.create);
+        if (!validation.isValid) {
+          return res.status(400).json({
+            success: false,
+            error: 'Validation failed',
+            details: validation.errors
+          });
+        }
+      }
+
+      // Подготовка данных
+      let data = this.prepareCreateData(req);
+      
+      // Удаляем null и undefined значения перед сохранением
+      const { removeUndefinedNullValues } = require('../utils/dataHelpers');
+      data = removeUndefinedNullValues(data);
+      
+      // Создание записи
+      const newDoc = new this.model(data);
+      const saved = await newDoc.save();
+
+      // Запись в историю только для статистики (без детальных изменений)
+      if (this.historyModel) {
+        await this.createHistoryRecord(saved._id, 'created', req.user?.id, []);
+      }
+
+      // Применение DTO
+      const formattedDoc = this.dto ? this.dto.format(saved) : saved;
+
+      res.status(201).json({
+        success: true,
+        data: formattedDoc,
+        message: `${this.modelName} created successfully`
+      });
+    } catch (error) {
+      this.handleError(res, error, 'Failed to create record');
+    }
+  };
+
+  /**
+   * Обновить запись
+   */
+  update = async (req, res) => {
+    try {
+      const { id } = req.params;
+
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        return res.status(400).json({
+          success: false,
+          error: 'Invalid ID format'
+        });
+      }
+
+      // Валидация данных
+      if (this.validationRules.update) {
+        const validation = this.validateData(req.body, this.validationRules.update);
+        if (!validation.isValid) {
+          return res.status(400).json({
+            success: false,
+            error: 'Validation failed',
+            details: validation.errors
+          });
+        }
+      }
+
+      // Получение старой записи для истории и сравнения
+      const oldDoc = await this.model.findById(id);
+      if (!oldDoc) {
+        return res.status(404).json({
+          success: false,
+          error: `${this.modelName} not found`
+        });
+      }
+
+      // Фильтруем только измененные поля
+      const filteredData = this.filterChangedFields(oldDoc, req.body);
+      
+      // Если нет изменений, возвращаем существующую запись
+      if (Object.keys(filteredData).length === 0) {
+        const formattedDoc = this.dto ? this.dto.format(oldDoc) : oldDoc;
+        return res.status(200).json({
+          success: true,
+          data: formattedDoc,
+          message: 'No changes detected'
+        });
+      }
+
+      // Подготовка данных (только для измененных полей)
+      let data = this.prepareUpdateData(req, filteredData);
+      
+      // Удаляем null и undefined значения перед сохранением
+      const { removeUndefinedNullValues } = require('../utils/dataHelpers');
+      data = removeUndefinedNullValues(data);
+
+      // Обновление записи
+      const updated = await this.model.findByIdAndUpdate(
+        id,
+        data,
+        { new: true, runValidators: true }
+      );
+
+      // Запись в историю изменений
+      if (this.historyModel) {
+        const changes = this.getChanges(oldDoc, req.body);
+        if (changes.length > 0) {
+          await this.createHistoryRecord(id, 'updated', req.user?.id, changes);
+        }
+      }
+
+      // Применение DTO
+      const formattedDoc = this.dto ? this.dto.format(updated) : updated;
+
+      res.status(200).json({
+        success: true,
+        data: formattedDoc,
+        message: `${this.modelName} updated successfully`
+      });
+    } catch (error) {
+      this.handleError(res, error, 'Failed to update record');
+    }
+  };
+
+  /**
+   * Удалить запись
+   */
+  delete = async (req, res) => {
+    try {
+      const { id } = req.params;
+
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        return res.status(400).json({
+          success: false,
+          error: 'Invalid ID format'
+        });
+      }
+
+      const doc = await this.model.findById(id);
+      if (!doc) {
+        return res.status(404).json({
+          success: false,
+          error: `${this.modelName} not found`
+        });
+      }
+
+      if (this.softDelete) {
+        // Мягкое удаление
+        await this.model.findByIdAndUpdate(id, { 
+          deletedAt: new Date(),
+          deletedBy: req.user?.id 
+        });
+      } else {
+        // Жесткое удаление
+        await this.model.findByIdAndDelete(id);
+      }
+
+      // Запись в историю
+      if (this.historyModel) {
+        await this.createHistoryRecord(id, 'deleted', req.user?.id, []);
+      }
+
+      res.status(200).json({
+        success: true,
+        message: `${this.modelName} deleted successfully`
+      });
+    } catch (error) {
+      this.handleError(res, error, 'Failed to delete record');
+    }
+  };
+
+  /**
+   * Поиск и фильтрация
+   */
+  search = async (req, res) => {
+    try {
+      const {
+        q: searchTerm,
+        page = 1,
+        limit = 10,
+        sortBy = 'createdAt',
+        sortOrder = 'desc',
+        ...filters
+      } = req.query;
+
+      // Построение фильтра с поиском
+      const filter = this.buildSearchFilter(filters, searchTerm);
+      
+      // Построение сортировки
+      const sort = this.buildSort(sortBy, sortOrder);
+
+      // Выполнение запроса
+      const docs = await this.model
+        .find(filter)
+        .populate(this.populateFields)
+        .sort(sort)
+        .skip((page - 1) * limit)
+        .limit(parseInt(limit));
+
+      const total = await this.model.countDocuments(filter);
+
+      // Применение DTO
+      const formattedDocs = this.dto ? docs.map(doc => this.dto.format(doc)) : docs;
+
+      res.status(200).json({
+        success: true,
+        data: formattedDocs,
+        pagination: {
+          total,
+          totalPages: Math.ceil(total / limit),
+          currentPage: parseInt(page),
+          limit: parseInt(limit)
+        }
+      });
+    } catch (error) {
+      this.handleError(res, error, 'Failed to search records');
+    }
+  };
+
+  /**
+   * Получить статистику
+   */
+  getStats = async (req, res) => {
+    try {
+      const { period = 'month', startDate, endDate } = req.query;
+      
+      let dateFilter = {};
+      
+      if (startDate && endDate) {
+        dateFilter.createdAt = {
+          $gte: new Date(startDate),
+          $lte: new Date(endDate)
+        };
+      } else {
+        const now = new Date();
+        if (period === 'day') {
+          const startOfDay = new Date(now.setHours(0, 0, 0, 0));
+          const endOfDay = new Date(now.setHours(23, 59, 59, 999));
+          dateFilter.createdAt = { $gte: startOfDay, $lte: endOfDay };
+        } else if (period === 'month') {
+          const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+          const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+          dateFilter.createdAt = { $gte: startOfMonth, $lte: endOfMonth };
+        }
+      }
+
+      const stats = await this.model.aggregate([
+        { $match: dateFilter },
+        {
+          $group: {
+            _id: null,
+            total: { $sum: 1 },
+            createdAt: { $push: '$createdAt' }
+          }
+        }
+      ]);
+
+      res.status(200).json({
+        success: true,
+        data: {
+          period,
+          total: stats[0]?.total || 0,
+          dateRange: dateFilter
+        }
+      });
+    } catch (error) {
+      this.handleError(res, error, 'Failed to get statistics');
+    }
+  };
+
+  /**
+   * Массовое обновление
+   */
+  bulkUpdate = async (req, res) => {
+    try {
+      const { ids, data } = req.body;
+
+      if (!Array.isArray(ids) || ids.length === 0) {
+        return res.status(400).json({
+          success: false,
+          error: 'IDs array is required'
+        });
+      }
+
+      const result = await this.model.updateMany(
+        { _id: { $in: ids } },
+        { ...data, updatedBy: req.user?.id, updatedAt: new Date() }
+      );
+
+      res.status(200).json({
+        success: true,
+        message: `${result.modifiedCount} records updated successfully`,
+        modifiedCount: result.modifiedCount
+      });
+    } catch (error) {
+      this.handleError(res, error, 'Failed to bulk update records');
+    }
+  };
+
+  /**
+   * Массовое удаление
+   */
+  bulkDelete = async (req, res) => {
+    try {
+      const { ids } = req.body;
+
+      if (!Array.isArray(ids) || ids.length === 0) {
+        return res.status(400).json({
+          success: false,
+          error: 'IDs array is required'
+        });
+      }
+
+      let result;
+      if (this.softDelete) {
+        result = await this.model.updateMany(
+          { _id: { $in: ids } },
+          { deletedAt: new Date(), deletedBy: req.user?.id }
+        );
+      } else {
+        result = await this.model.deleteMany({ _id: { $in: ids } });
+      }
+
+      res.status(200).json({
+        success: true,
+        message: `${result.deletedCount || result.modifiedCount} records deleted successfully`,
+        deletedCount: result.deletedCount || result.modifiedCount
+      });
+    } catch (error) {
+      this.handleError(res, error, 'Failed to bulk delete records');
+    }
+  };
+
+  // ========== ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ ==========
+
+  /**
+   * Построение фильтра с whitelist проверкой
+   */
+  buildFilter(filters, search) {
+    const filter = {};
+
+    // Исключаем служебные параметры из фильтров
+    const excludedKeys = ['page', 'limit', 'sortBy', 'sortOrder', 'search'];
+
+    // Security: Only allow whitelisted filter fields
+    const hasWhitelist = Array.isArray(this.allowedFilters) && this.allowedFilters.length > 0;
+
+    // Добавление фильтров
+    Object.keys(filters).forEach(key => {
+      // Пропускаем служебные параметры
+      if (excludedKeys.includes(key)) {
+        return;
+      }
+
+      // Security: Check whitelist if configured
+      if (hasWhitelist && !this.allowedFilters.includes(key)) {
+        console.warn(`[Security] Filter field "${key}" not in whitelist, ignoring`);
+        return;
+      }
+
+      if (filters[key] !== undefined && filters[key] !== '') {
+        if (Array.isArray(filters[key])) {
+          if (filters[key].length > 0) {
+            filter[key] = { $in: filters[key] };
+          }
+          return;
+        }
+        if (key.includes('Date') || (key.includes('At') && key !== 'sortBy' && key !== 'sortOrder')) {
+          // Обработка дат (но не sortBy/sortOrder)
+          if (typeof filters[key] === 'string' && filters[key].includes('to')) {
+            const [start, end] = filters[key].split(' to ');
+            filter[key] = {
+              $gte: new Date(start),
+              $lte: new Date(end)
+            };
+          } else {
+            filter[key] = new Date(filters[key]);
+          }
+        } else if (key.includes('In')) {
+          // Обработка массивов
+          filter[key] = { $in: filters[key].split(',') };
+        } else {
+          filter[key] = filters[key];
+        }
+      }
+    });
+
+    // Добавление поиска (только по разрешенным полям)
+    if (search && this.searchFields.length > 0) {
+      const searchRegex = { $regex: search, $options: 'i' };
+      filter.$or = this.searchFields.map(field => ({
+        [field]: searchRegex
+      }));
+    }
+
+    return filter;
+  }
+
+  /**
+   * Построение фильтра с поиском
+   */
+  buildSearchFilter(filters, searchTerm) {
+    const filter = this.buildFilter(filters, searchTerm);
+    
+    if (searchTerm) {
+      const searchRegex = { $regex: searchTerm, $options: 'i' };
+      filter.$or = this.searchFields.map(field => ({
+        [field]: searchRegex
+      }));
+    }
+
+    return filter;
+  }
+
+  /**
+   * Построение сортировки с whitelist проверкой
+   */
+  buildSort(sortBy, sortOrder) {
+    // Security: Validate sort field against whitelist
+    const hasWhitelist = Array.isArray(this.allowedSortFields) && this.allowedSortFields.length > 0;
+    
+    if (hasWhitelist && !this.allowedSortFields.includes(sortBy)) {
+      console.warn(`[Security] Sort field "${sortBy}" not in whitelist, using default`);
+      sortBy = 'createdAt'; // Default to createdAt
+    }
+    
+    const sort = {};
+    sort[sortBy] = sortOrder === 'asc' ? 1 : -1;
+    return sort;
+  }
+
+  /**
+   * Подготовка данных для создания
+   */
+  prepareCreateData(req) {
+    const data = { ...req.body };
+    
+    // Добавление аудиторских полей
+    if (req.user?.id) {
+      this.auditFields.forEach(field => {
+        if (field === 'createdBy' || field === 'updatedBy') {
+          data[field] = req.user.id;
+        }
+      });
+    }
+
+    // Обработка загруженных файлов
+    if (req.uploadedFiles) {
+      if (Array.isArray(req.uploadedFiles)) {
+        data.images = req.uploadedFiles;
+      } else {
+        data.profileImage = req.uploadedFiles;
+      }
+    }
+
+    return data;
+  }
+
+  /**
+   * Подготовка данных для обновления
+   */
+  prepareUpdateData(req, filteredData = null) {
+    const data = filteredData ? { ...filteredData } : { ...req.body };
+    
+    // Security: Remove dangerous fields that might have been passed in req.body
+    const dangerousFields = ['_id', 'id', 'userId', 'createdAt', '__v'];
+    dangerousFields.forEach(field => {
+      delete data[field];
+    });
+    
+    // Добавление аудиторских полей (set by server, not client)
+    if (req.user?.id) {
+      data.updatedBy = req.user.id;
+      data.updatedAt = new Date();
+    }
+
+    // Обработка загруженных файлов
+    if (req.uploadedFiles) {
+      if (Array.isArray(req.uploadedFiles)) {
+        data.images = req.uploadedFiles;
+      } else {
+        data.profileImage = req.uploadedFiles;
+      }
+    }
+
+    return data;
+  }
+
+  /**
+   * Валидация данных
+   */
+  validateData(data, rules) {
+    const errors = [];
+    
+    Object.keys(rules).forEach(field => {
+      const rule = rules[field];
+      const value = this.getNestedValue(data, field);
+
+      if (rule.required && (value === undefined || value === null || value === '')) {
+        errors.push({ field, message: `${field} is required` });
+        return; // Skip further validation if required field is missing
+      }
+
+      // Skip validation if value is undefined and not required
+      if (value === undefined) {
+        return;
+      }
+
+      if (rule.type) {
+        // Validate string type
+        if (rule.type === 'string') {
+          if (typeof value !== 'string') {
+            errors.push({ field, message: `${field} must be a string` });
+          } else {
+            // Validate string length if specified
+            if (rule.minLength && value.length < rule.minLength) {
+              errors.push({ field, message: `${field} must be at least ${rule.minLength} characters` });
+            }
+            if (rule.maxLength && value.length > rule.maxLength) {
+              errors.push({ field, message: `${field} must be at most ${rule.maxLength} characters` });
+            }
+          }
+        }
+        
+        // Validate email type
+        if (rule.type === 'email' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) {
+          errors.push({ field, message: `${field} must be a valid email` });
+        }
+        
+        // Validate number type
+        if (rule.type === 'number') {
+          if (isNaN(value)) {
+            errors.push({ field, message: `${field} must be a number` });
+          } else {
+            // Validate number range if specified
+            if (rule.min !== undefined && Number(value) < rule.min) {
+              errors.push({ field, message: `${field} must be at least ${rule.min}` });
+            }
+            if (rule.max !== undefined && Number(value) > rule.max) {
+              errors.push({ field, message: `${field} must be at most ${rule.max}` });
+            }
+          }
+        }
+        
+        // Validate array type
+        if (rule.type === 'array') {
+          if (!Array.isArray(value)) {
+            errors.push({ field, message: `${field} must be an array` });
+          } else {
+            // Validate array length if specified
+            if (rule.minItems && value.length < rule.minItems) {
+              errors.push({ field, message: `${field} must have at least ${rule.minItems} items` });
+            }
+            if (rule.maxItems && value.length > rule.maxItems) {
+              errors.push({ field, message: `${field} must have at most ${rule.maxItems} items` });
+            }
+          }
+        }
+        
+        // Validate ObjectId type
+        if (rule.type === 'objectId') {
+          if (!mongoose.Types.ObjectId.isValid(value)) {
+            errors.push({ field, message: `${field} must be a valid ObjectId` });
+          }
+        }
+      }
+
+      // Валидация enum значений
+      if (rule.enum && Array.isArray(rule.enum)) {
+        if (!rule.enum.includes(value)) {
+          errors.push({ 
+            field, 
+            message: `${field} must be one of: ${rule.enum.join(', ')}` 
+          });
+        }
+      }
+    });
+
+    return {
+      isValid: errors.length === 0,
+      errors
+    };
+  }
+
+  /**
+   * Get nested value from object using dot notation
+   */
+  getNestedValue(obj, path) {
+    return path.split('.').reduce((current, key) => {
+      return current && current[key] !== undefined ? current[key] : undefined;
+    }, obj);
+  }
+
+  /**
+   * Получение изменений между старой и новой записью
+   */
+  getChanges(oldDoc, newData) {
+    const changes = [];
+    
+    Object.keys(newData).forEach(key => {
+      const oldValue = oldDoc[key];
+      const newValue = newData[key];
+      
+      // Пропускаем служебные поля
+      if (['_id', 'createdAt', 'updatedAt', '__v'].includes(key)) {
+        return;
+      }
+      
+      // Сравниваем значения
+      const isChanged = this.compareValues(oldValue, newValue);
+      
+      if (isChanged) {
+        changes.push({
+          field: key,
+          oldValue: oldValue,
+          newValue: newValue
+        });
+      }
+    });
+
+    return changes;
+  }
+
+  /**
+   * Сравнение значений с учетом различных типов данных
+   */
+  compareValues(oldValue, newValue) {
+    // Если оба значения null/undefined - нет изменений
+    if ((oldValue === null || oldValue === undefined) && 
+        (newValue === null || newValue === undefined)) {
+      return false;
+    }
+    
+    // Если одно null/undefined, а другое нет - есть изменение
+    if ((oldValue === null || oldValue === undefined) !== 
+        (newValue === null || newValue === undefined)) {
+      return true;
+    }
+    
+    // Нормализация ObjectId для сравнения
+    const normalizeObjectId = (value) => {
+      if (!value) return null;
+      // Если это ObjectId или имеет _id, возвращаем строковое представление
+      if (mongoose.Types.ObjectId.isValid(value)) {
+        return value.toString();
+      }
+      // Если это объект с _id (populated), используем _id
+      if (value && typeof value === 'object' && value._id) {
+        return value._id.toString();
+      }
+      return value;
+    };
+    
+    const normalizedOld = normalizeObjectId(oldValue);
+    const normalizedNew = normalizeObjectId(newValue);
+    
+    // Если после нормализации одно из значений стало null, сравниваем как есть
+    if (normalizedOld === null || normalizedNew === null) {
+      return normalizedOld !== normalizedNew;
+    }
+    
+    // Для строк - нормализуем пробелы и сравниваем
+    if (typeof normalizedOld === 'string' && typeof normalizedNew === 'string') {
+      return normalizedOld.trim() !== normalizedNew.trim();
+    }
+    
+    // Для объектов используем JSON.stringify (после нормализации ObjectId)
+    if (typeof normalizedOld === 'object' && typeof normalizedNew === 'object') {
+      // Для массивов сравниваем по содержимому
+      if (Array.isArray(normalizedOld) && Array.isArray(normalizedNew)) {
+        if (normalizedOld.length !== normalizedNew.length) {
+          return true;
+        }
+        // Сравниваем каждый элемент
+        for (let i = 0; i < normalizedOld.length; i++) {
+          if (this.compareValues(normalizedOld[i], normalizedNew[i])) {
+            return true;
+          }
+        }
+        return false;
+      }
+      return JSON.stringify(normalizedOld) !== JSON.stringify(normalizedNew);
+    }
+    
+    // Для примитивных типов простое сравнение
+    return normalizedOld !== normalizedNew;
+  }
+
+  /**
+   * Фильтрует только измененные поля, исключая неизмененные значения
+   * @param {Object} existingDoc - существующий документ
+   * @param {Object} newData - новые данные
+   * @returns {Object} - объект только с измененными полями
+   */
+  filterChangedFields(existingDoc, newData) {
+    const filteredData = {};
+    
+    // Security: List of fields that should NEVER be updated from client request
+    const dangerousFields = [
+      '_id', 
+      'id', 
+      'userId', 
+      'createdAt', 
+      'updatedAt', 
+      '__v',
+      'createdBy' // Should be set by server, not client
+    ];
+    
+    Object.keys(newData).forEach(key => {
+      // Security: Skip dangerous fields
+      if (dangerousFields.includes(key)) {
+        console.warn(`[Security] Attempted to update protected field: ${key}`);
+        return;
+      }
+      
+      const existingValue = existingDoc[key];
+      const newValue = newData[key];
+      
+      // Сравниваем значения
+      const isChanged = this.compareValues(existingValue, newValue);
+      
+      if (isChanged) {
+        filteredData[key] = newValue;
+      }
+    });
+
+    return filteredData;
+  }
+
+  /**
+   * Создание записи в истории
+   */
+  async createHistoryRecord(recordId, action, userId, changes) {
+    if (!this.historyModel) return;
+
+    if (!userId) {
+      console.warn(`Cannot create history record: userId is required for action '${action}'`);
+      return;
+    }
+
+    try {
+      const User = require('../models/User');
+      const user = await User.findById(userId).select('_id role email').lean();
+      
+      if (!user) {
+        console.warn(`Cannot create history record: user with id ${userId} not found`);
+        return;
+      }
+
+      const actor = {
+        actorId: user._id,
+        actorRole: user.role || 'unknown',
+        actorEmail: user.email || null
+      };
+
+      const changesArray = Array.isArray(changes) ? changes : [];
+      
+      const filteredChanges = changesArray
+        .filter(change => 
+          change.field && 
+          change.oldValue !== change.newValue && 
+          (change.oldValue !== null || change.newValue !== null)
+        )
+        .map(change => ({
+          field: change.field,
+          from: change.oldValue,
+          to: change.newValue
+        }));
+
+      if (filteredChanges.length > 0 || action === 'created' || action === 'deleted') {
+        await this.historyModel.create({
+          load: recordId,
+          action,
+          actor,
+          changes: filteredChanges
+        });
+      }
+    } catch (error) {
+      console.error('Failed to create history record:', error);
+    }
+  }
+
+  /**
+   * Обработка ошибок
+   */
+  handleError(res, error, message) {
+    console.error(`${this.modelName} Error:`, error);
+    
+    if (error.name === 'ValidationError') {
+      const errors = Object.values(error.errors).map(err => ({
+        field: err.path,
+        message: err.message
+      }));
+      
+      return res.status(400).json({
+        success: false,
+        error: 'Validation failed',
+        details: errors
+      });
+    }
+
+    if (error.name === 'CastError') {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid ID format'
+      });
+    }
+
+    if (error.code === 11000) {
+      const errorDetails = { ...error.keyValue };
+      if (errorDetails.loadId !== undefined) {
+        delete errorDetails.loadId;
+      }
+      
+      const duplicateFields = Object.keys(errorDetails);
+      const hasNullUndefinedDuplicate = duplicateFields.some(field => {
+        const value = errorDetails[field];
+        return value === null || value === undefined || value === 'null' || value === 'undefined';
+      });
+      
+      if (hasNullUndefinedDuplicate) {
+        return res.status(200).json({
+          success: true,
+          message: 'Record saved successfully (duplicate null/undefined values are allowed)'
+        });
+      }
+      
+      let errorMessage = 'A record with this value already exists';
+      if (errorDetails.orderId) {
+        errorMessage = `Load with Order ID "${errorDetails.orderId}" already exists`;
+      } else if (duplicateFields.length > 0) {
+        const field = duplicateFields[0];
+        const value = errorDetails[field];
+        errorMessage = `A record with ${field} "${value}" already exists`;
+      }
+      
+      return res.status(400).json({
+        success: false,
+        error: 'Duplicate entry',
+        details: duplicateFields.length > 0 ? errorDetails : null,
+        message: errorMessage
+      });
+    }
+
+    res.status(500).json({
+      success: false,
+      error: message,
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+}
+
+module.exports = UniversalBaseController;

@@ -1,0 +1,31 @@
+<div style="font-family: Arial, sans-serif; background-color: #FAF8F8; padding: 20px;">
+  <div style="max-width: 600px; margin: auto; background-color: #FFFFFF; border-radius: 8px; overflow: hidden;">
+    <div style="background: linear-gradient(to right, #1D75BF, #5FAEF1); color: #FFFFFF; padding: 20px;">
+      <h2>Shipment Status Updated</h2>
+      <p><s>{{oldStatus}}</s> → <strong>{{newStatus}}</strong></p>
+    </div>
+
+    <div style="padding: 20px; color: #212121;">
+      <h3 style="color: #1D75BF;">VIN: {{vin}}</h3>
+      <p><strong>Carrier:</strong> {{carrier.name}} | {{carrier.contact}}</p>
+      <p><strong>Pickup:</strong> {{pickupLocation.city}}, {{pickupLocation.state}}</p>
+      <p><strong>Delivery:</strong> {{deliveryLocation.city}}, {{deliveryLocation.state}}</p>
+
+      {{#if tracking}}
+      <div style="margin-top: 20px; background: #eaf4ff; padding: 15px; border-radius: 8px;">
+        <p><a href="{{tracking}}" style="color: #1D75BF;">Track Shipment</a></p>
+      </div>
+      {{/if}}
+
+      {{#if delivered}}
+      <div style="margin-top: 20px; background: #e4f9e6; padding: 15px; border-radius: 8px;">
+        <p>Your shipment has been delivered. Thank you for choosing Cierta!</p>
+      </div>
+      {{/if}}
+    </div>
+
+    <div style="background-color: #F4F4F4; text-align: center; padding: 15px; color: #ABABAB; font-size: 12px;">
+      This email was sent from Cierta’s tracking system.
+    </div>
+  </div>
+</div>
